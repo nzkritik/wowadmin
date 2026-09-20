@@ -68,17 +68,23 @@ SELECT c.name AS Name, c.level AS Lvl, c.race AS Race, c.class AS Class,
   FROM classiccharacters.characters c
  WHERE c.online = 1 ORDER BY c.level DESC LIMIT 200'''
 "Accounts" = '''
-SELECT a.id AS Id, a.username AS Account, a.gmlevel AS GM,
-       a.expansion AS Exp, a.last_login AS LastLogin
+SELECT a.id AS Id, a.username AS Account, a.gmlevel AS GM, a.expansion AS Exp,
+       a.joindate AS Joined, MAX(l.loginTime) AS LastLogin
   FROM classicrealmd.account a
- WHERE a.username NOT LIKE '${bot_pattern}' ORDER BY a.id LIMIT 200'''
+  LEFT JOIN classicrealmd.account_logons l ON l.accountId = a.id
+ WHERE a.username NOT LIKE '${bot_pattern}'
+ GROUP BY a.id, a.username, a.gmlevel, a.expansion, a.joindate
+ ORDER BY a.id LIMIT 200'''
 
 [servers.mysql]
 display_name  = "MariaDB"
-# start_sql.sh runs mariadbd in the foreground and shuts down on SIGTERM.
-# It needs /run/mysqld, created at boot by /etc/tmpfiles.d/mysqld.conf.
-executable    = "${root}/Database/mariadb/start_sql.sh"
-args          = []
+# The real binary, not CMaNGOS's start_sql.sh wrapper: the panel identifies a
+# running server by its executable, and a wrapper that launches something else
+# can never be matched, so it would neither be adopted nor stopped.
+# Needs /run/mysqld, created at boot by /etc/tmpfiles.d/mysqld.conf.
+executable    = "${root}/Database/mariadb/bin/mariadbd"
+args          = ["--defaults-file=${root}/Database/mariadb/my.cnf", "--user=${USER}"]
+working_dir   = "${root}/Database/mariadb"
 enabled       = true
 ready_port    = 3306
 ready_timeout = 120.0

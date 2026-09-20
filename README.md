@@ -123,6 +123,10 @@ Initialized`, CMaNGOS and TrinityCore write `World initialized`. Start your
 world server by hand once, see what it prints when it finishes loading, and
 use that. Where a port is enough, `ready_port` is cheaper and more reliable.
 
+Point `executable` at the binary that actually runs, not at a wrapper script
+that launches it in the background: the panel identifies a running server by
+its executable, so a wrapper can be started but never recognised or stopped.
+
 **4. Your bot account convention**, if you run bots. `[vars].bot_pattern` is
 substituted into the queries, so the Players / Bots split works whatever your
 bots are called.

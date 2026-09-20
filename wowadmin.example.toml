@@ -177,6 +177,10 @@ SELECT a.id AS Id, a.username AS Account, a.expansion AS Exp,
 #   stop_command        — an external command (e.g. mysqladmin shutdown)
 #   neither             — SIGTERM, then SIGKILL after shutdown_timeout
 
+# Point `executable` at the process that actually runs, never at a wrapper
+# script that launches it in the background. The panel identifies a running
+# server by its executable, so a wrapper can be started but never adopted or
+# stopped — it looks stopped while your database is still up.
 [servers.mysql]
 display_name  = "MySQL"
 executable    = "${root}/mysql/bin/mysqld"
