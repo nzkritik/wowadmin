@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="wowadmin">
+  <rect width="64" height="64" rx="12" fill="#12131a"/>
+  <rect x="8.5" y="8.5" width="47" height="47" rx="8" fill="none" stroke="#2c3040"/>
+  <!-- server stack: three bars, the top one lit like a running process -->
+  <rect x="16" y="17" width="32" height="9" rx="2.5" fill="#21242f" stroke="#2c3040"/>
+  <circle cx="21.5" cy="21.5" r="2.4" fill="#5dbb63"/>
+  <rect x="16" y="29.5" width="32" height="9" rx="2.5" fill="#21242f" stroke="#2c3040"/>
+  <circle cx="21.5" cy="34" r="2.4" fill="#c8a45c"/>
+  <rect x="16" y="42" width="32" height="9" rx="2.5" fill="#21242f" stroke="#2c3040"/>
+  <circle cx="21.5" cy="46.5" r="2.4" fill="#8b90a4"/>
+</svg>

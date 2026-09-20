@@ -1,0 +1,7 @@
+# Your own config and artwork stay out of the repo.
+wowadmin.toml
+*.bak
+*.bak-*
+theme/
+__pycache__/
+*.pyc

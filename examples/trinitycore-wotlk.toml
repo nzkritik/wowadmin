@@ -1,0 +1,124 @@
+# TrinityCore (WotLK 3.3.5a) — UNTESTED. Derived from the verified AzerothCore
+# profile: same binaries and layout, but TrinityCore's databases are named
+# `auth`, `characters` and `world` rather than `acore_*`.
+#
+# Two things to check against your own build before trusting this:
+#   * the database names —  SHOW DATABASES;
+#   * the world server's ready line. Start it once by hand and look for the
+#     line it prints when it finishes loading; put that in ready_pattern.
+#
+# Corrections welcome — open an issue or a pull request.
+
+[vars]
+root        = "/srv/wow/trinitycore"
+bot_pattern = "RNDBOT%"
+
+[app]
+bind          = "127.0.0.1"
+port          = 8090
+log_max_lines = 5000
+poll_interval = 3.0
+shutdown_delay   = 30
+shutdown_timeout = 300
+autostart     = false
+browser       = ""
+
+[branding]
+title           = "TrinityCore — Server Control"
+# Point these at your own artwork; none ships with wowadmin.
+# logo            = "theme/logo.png"
+# logo_alt        = "My Realm"
+# banner          = "theme/banner.jpg"
+# banner_opacity  = 0.30
+# banner_position = "center 38%"
+# favicon         = "theme/icon-64.png"
+# apple_icon      = "theme/icon-180.png"
+console_hint    = "server info    (↑/↓ for history — sent to the world console)"
+
+[branding.theme]
+accent = "#b06f5a"
+
+[realm]
+name         = "TrinityCore"
+id           = 1
+realm_port   = 3724
+world_port   = 8085
+server_build = "3.3.5a build 12340"
+
+[database]
+enabled       = true
+client        = "${root}/mysql/bin/mysql"
+defaults_file = "${root}/world-client.cnf"
+server        = "mysql"
+interval      = 15.0
+default_filter = "All Online"
+count_query = "SELECT COUNT(*) AS Online FROM characters.characters WHERE online = 1"
+
+[database.filters]
+"Online Players" = '''
+SELECT c.name AS Name, a.username AS Account, c.level AS Lvl,
+       c.race AS Race, c.class AS Class, c.zone AS Zone
+  FROM characters.characters c
+  JOIN auth.account a ON a.id = c.account
+ WHERE c.online = 1 AND a.username NOT LIKE '${bot_pattern}'
+ ORDER BY c.level DESC LIMIT 200'''
+"Online Bots" = '''
+SELECT c.name AS Name, a.username AS Account, c.level AS Lvl,
+       c.race AS Race, c.class AS Class, c.zone AS Zone
+  FROM characters.characters c
+  JOIN auth.account a ON a.id = c.account
+ WHERE c.online = 1 AND a.username LIKE '${bot_pattern}'
+ ORDER BY c.level DESC LIMIT 200'''
+"All Online" = '''
+SELECT c.name AS Name, c.level AS Lvl, c.race AS Race, c.class AS Class, c.zone AS Zone
+  FROM characters.characters c
+ WHERE c.online = 1 ORDER BY c.level DESC LIMIT 200'''
+"Accounts" = '''
+SELECT a.id AS Id, a.username AS Account, a.expansion AS Exp,
+       COALESCE(aa.gmlevel, 0) AS GM, a.last_login AS LastLogin
+  FROM auth.account a
+  LEFT JOIN auth.account_access aa ON aa.id = a.id
+ WHERE a.username NOT LIKE '${bot_pattern}' ORDER BY a.id LIMIT 200'''
+
+[servers.mysql]
+display_name  = "MySQL"
+executable    = "${root}/mysql/bin/mysqld"
+args          = ["--defaults-file=${root}/my.cnf"]
+working_dir   = "${root}"
+enabled       = true
+ready_port    = 3306
+ready_timeout = 120.0
+stop_command  = ["${root}/mysql/bin/mysqladmin",
+                 "--defaults-file=${root}/my.cnf", "-u", "root", "shutdown"]
+
+[servers.auth]
+display_name  = "Auth Server"
+executable    = "${root}/bin/authserver"
+args          = []
+working_dir   = "${root}/bin"
+enabled       = true
+ready_port    = 3724
+ready_timeout = 60.0
+
+[servers.world]
+display_name  = "World Server"
+executable    = "${root}/bin/worldserver"
+args          = []
+working_dir   = "${root}/bin"
+enabled       = true
+console       = true
+# TrinityCore logs "World initialized in X minutes Y seconds" — confirm the
+# exact wording for your build, the capitalisation differs between cores.
+ready_pattern = "World initialized"
+ready_timeout = 900.0
+stop_console_command = "server shutdown {delay}"
+
+[configs]
+enabled = true
+backup  = true
+
+[configs.files]
+"worldserver.conf" = "${root}/etc/worldserver.conf"
+"authserver.conf"  = "${root}/etc/authserver.conf"
+# "playerbots.conf"  = "${root}/etc/modules/playerbots.conf"
+"wowadmin.toml"    = "${config_dir}/wowadmin.toml"

@@ -1,0 +1,10 @@
+# wowadmin needs nothing to run: the panel is stdlib-only Python 3.11+.
+#
+# psutil is the one optional extra. With it, the panel also sees servers that
+# were started outside it (from a terminal, or left behind by a previous
+# panel) and can report and stop them. Without it, those simply show as
+# stopped. Install it from your distro (python-psutil) or here:
+#
+#   pip install -r requirements.txt
+#
+psutil>=5.9

@@ -1,0 +1,128 @@
+# CMaNGOS WotLK — UNTESTED. Derived from the verified Classic profile by changing
+# the database names and the build string; everything else is CMaNGOS's
+# shared layout. Check the database names against your own install before
+# trusting the roster queries:  SHOW DATABASES;
+#
+# Corrections welcome — open an issue or a pull request.
+
+[vars]
+root        = "/srv/wow/wotlk"
+bot_pattern = "RNDBOT%"
+
+[app]
+bind          = "127.0.0.1"
+port          = 8090
+log_max_lines = 5000
+poll_interval = 3.0
+shutdown_delay   = 30
+shutdown_timeout = 300
+autostart     = false
+browser       = ""
+
+[branding]
+title        = "CMaNGOS WotLK — Server Control"
+console_hint = "server info    (↑/↓ for history — sent to the world console)"
+
+# Any CSS colour. Handy for telling two realms apart at a glance.
+[branding.theme]
+accent = "#5fa8d3"
+
+[realm]
+name         = "WOTLK"
+id           = 1
+realm_port   = 3724
+world_port   = 8085
+server_build = "3.3.5a build 12340"
+
+[database]
+enabled  = true
+client   = "${root}/Database/mariadb/bin/mariadb"
+socket   = "/run/mysqld/mysqld.sock"   # set in Database/mariadb/my.cnf
+user     = "mangos"
+password = "mangos"   # or "$WOWADMIN_DB_PASSWORD" to keep it out of this file
+database = "wotlkcharacters"
+server   = "mysql"
+port     = 3306
+interval = 15.0
+default_filter = "All Online"
+count_query = "SELECT COUNT(*) AS Online FROM wotlkcharacters.characters WHERE online = 1"
+
+# Zone is the numeric area ID: CMaNGOS keeps area names only in the client's
+# AreaTable.dbc, with no world-database table to join against.
+[database.filters]
+"Online Players" = '''
+SELECT c.name AS Name, acc.username AS Account, c.level AS Lvl,
+       c.race AS Race, c.class AS Class, c.`zone` AS Zone
+  FROM wotlkcharacters.characters c
+  JOIN wotlkrealmd.account acc ON c.account = acc.id
+ WHERE c.online = 1 AND acc.username NOT LIKE '${bot_pattern}'
+ ORDER BY c.level DESC LIMIT 200'''
+"Online Bots" = '''
+SELECT c.name AS Name, acc.username AS Account, c.level AS Lvl,
+       c.race AS Race, c.class AS Class, c.`zone` AS Zone
+  FROM wotlkcharacters.characters c
+  JOIN wotlkrealmd.account acc ON c.account = acc.id
+ WHERE c.online = 1 AND acc.username LIKE '${bot_pattern}'
+ ORDER BY c.level DESC LIMIT 200'''
+"All Online" = '''
+SELECT c.name AS Name, c.level AS Lvl, c.race AS Race, c.class AS Class,
+       c.`zone` AS Zone
+  FROM wotlkcharacters.characters c
+ WHERE c.online = 1 ORDER BY c.level DESC LIMIT 200'''
+"Accounts" = '''
+SELECT a.id AS Id, a.username AS Account, a.gmlevel AS GM,
+       a.expansion AS Exp, a.last_login AS LastLogin
+  FROM wotlkrealmd.account a
+ WHERE a.username NOT LIKE '${bot_pattern}' ORDER BY a.id LIMIT 200'''
+
+[servers.mysql]
+display_name  = "MariaDB"
+# start_sql.sh runs mariadbd in the foreground and shuts down on SIGTERM.
+# It needs /run/mysqld, created at boot by /etc/tmpfiles.d/mysqld.conf.
+executable    = "${root}/Database/mariadb/start_sql.sh"
+args          = []
+enabled       = true
+ready_port    = 3306
+ready_timeout = 120.0
+
+[servers.realm]
+display_name  = "Realm Server"
+executable    = "${root}/bin/realmd"
+args          = ["-c", "${root}/etc/realmd.conf"]
+working_dir   = "${root}/bin"
+enabled       = true
+ready_port    = 3724
+ready_timeout = 60.0
+# realmd is the one that loses the race if the database is not accepting
+# connections yet, so give it a couple of goes.
+retry_delay   = 3.0
+max_retries   = 5
+
+[servers.world]
+display_name  = "World Server"
+executable    = "${root}/bin/mangosd"
+# ahbot.conf has no built-in default path, and without aiplayerbot.conf the
+# playerbots module switches itself off — so all three are named.
+args          = ["-c", "${root}/etc/mangosd.conf",
+                 "-a", "${root}/etc/ahbot.conf",
+                 "-p", "${root}/etc/aiplayerbot.conf"]
+# mangosd.conf has DataDir = "." and writes its logs to the working
+# directory, so this must be Server/bin.
+working_dir   = "${root}/bin"
+enabled       = true
+console       = true
+# CMaNGOS prints "CMANGOS: World initialized" — note the lowercase i, where
+# AzerothCore writes "World Initialized".
+ready_pattern = "World initialized"
+ready_timeout = 900.0
+stop_console_command = "server shutdown {delay}"
+
+[configs]
+enabled = true
+backup  = true
+
+[configs.files]
+"mangosd.conf"     = "${root}/etc/mangosd.conf"
+"realmd.conf"      = "${root}/etc/realmd.conf"
+"ahbot.conf"       = "${root}/etc/ahbot.conf"
+"aiplayerbot.conf" = "${root}/etc/aiplayerbot.conf"

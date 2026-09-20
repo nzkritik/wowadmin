@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wowadmin</title>
+<link rel="icon" id="favicon" href="/static/img/icon.svg">
+<link rel="apple-touch-icon" id="appleIcon" href="/static/img/icon.svg">
+<style>
+  :root {
+    --bg:#12131a; --panel:#1a1c26; --panel2:#21242f; --line:#2c3040;
+    --fg:#e6e8f0; --dim:#8b90a4; --accent:#c8a45c; --ok:#5dbb63;
+    --warn:#d9a441; --bad:#d2565b; --mono:"JetBrains Mono","Fira Code",ui-monospace,monospace;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  header { position:relative; display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+           padding:14px 16px; border-bottom:1px solid var(--line); overflow:hidden;
+           background:#0d0e13; }
+  /* Banner sits behind the header, darkened so text stays legible. All
+     three knobs come from [branding], so art of any brightness can be made
+     to work without editing this file. */
+  header::before { content:""; position:absolute; inset:0;
+    background-image:var(--banner-img,none);
+    background-position:var(--banner-pos,center 38%);
+    background-size:cover; background-repeat:no-repeat;
+    opacity:var(--banner-opacity,.30); filter:saturate(.85); }
+  header::after { content:""; position:absolute; inset:0;
+    background:linear-gradient(90deg,#0d0e13 0%,rgba(13,14,19,.55) 45%,rgba(13,14,19,.9) 100%); }
+  header > * { position:relative; z-index:1; }
+  header img.logo { height:var(--logo-height,46px); width:auto; display:block;
+                    filter:drop-shadow(0 2px 6px rgba(0,0,0,.8)); }
+  h1 { font-size:16px; margin:0; color:var(--accent); letter-spacing:.3px; white-space:nowrap; }
+  .realm { color:#b9bdd0; font-size:12px; text-shadow:0 1px 3px #000; }
+  /* Online count from [database].count_query; stays hidden when unset. */
+  .pop { font-family:var(--mono); font-size:11.5px; color:var(--accent);
+         border:1px solid var(--line); border-radius:4px; padding:1px 7px;
+         background:rgba(13,14,19,.6); white-space:nowrap; }
+  .spacer { flex:1; }
+  button { background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+           border-radius:6px; padding:6px 12px; font-size:13px; cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  button.primary { background:var(--accent); color:#1a1408; border-color:var(--accent); font-weight:600; }
+  button.danger:hover:not(:disabled) { border-color:var(--bad); color:var(--bad); }
+
+  main { display:grid; grid-template-columns:300px 1fr; gap:12px; padding:12px; align-items:start; }
+  @media (max-width:900px){ main { grid-template-columns:1fr; } }
+
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .card h2 { margin:0; padding:9px 12px; font-size:12px; text-transform:uppercase;
+             letter-spacing:.8px; color:var(--dim); border-bottom:1px solid var(--line);
+             background:var(--panel2); }
+  .card .body { padding:10px 12px; }
+
+  .srv { display:flex; align-items:center; gap:9px; padding:9px 12px; border-bottom:1px solid var(--line); }
+  .srv:last-child { border-bottom:0; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--bad); flex:none; }
+  .dot.running { background:var(--ok); box-shadow:0 0 7px var(--ok); }
+  .dot.starting,.dot.stopping { background:var(--warn); animation:pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity:.3; } }
+  .srv .meta { flex:1; min-width:0; }
+  .srv .nm { font-weight:600; }
+  .srv .sub { font-size:11px; color:var(--dim); font-family:var(--mono); }
+  .srv button { padding:3px 8px; font-size:11px; }
+  .badge { font-size:9.5px; text-transform:uppercase; letter-spacing:.5px;
+           color:var(--warn); border:1px solid var(--warn); border-radius:3px;
+           padding:0 4px; margin-left:5px; vertical-align:1px; font-weight:500; }
+
+  .tabs { display:flex; align-items:flex-end; gap:4px; padding:8px 10px 0;
+          background:var(--panel2); flex-wrap:wrap; }
+  .tabgroup { display:flex; gap:4px; flex-wrap:wrap; }
+  /* Divider between the console group and the config group. */
+  .tabsep { width:1px; align-self:stretch; margin:4px 8px 0; background:var(--line); }
+  .tabs button { border-radius:6px 6px 0 0; border-bottom-color:transparent; padding:5px 12px; }
+  .tabs button.active { background:var(--panel); color:var(--accent); border-color:var(--line); border-bottom-color:var(--panel); }
+  .tabs button.cfg::before { content:"⚙ "; opacity:.65; }
+
+  pre#console { margin:0; padding:10px 12px; height:56vh; min-height:280px; overflow-y:auto;
+                font-family:var(--mono); font-size:12.5px; line-height:1.45;
+                white-space:pre-wrap; word-break:break-word; background:#0e0f15; }
+  pre#console .cmd { color:var(--accent); }
+  pre#console .sys { color:var(--dim); font-style:italic; }
+  pre#console .err { color:var(--bad); }
+
+  .cmdbar { display:flex; gap:8px; padding:10px; border-top:1px solid var(--line); background:var(--panel2); }
+  .cmdbar input { flex:1; background:#0e0f15; color:var(--fg); border:1px solid var(--line);
+                  border-radius:6px; padding:7px 10px; font-family:var(--mono); font-size:13px; }
+  .cmdbar input:focus { outline:none; border-color:var(--accent); }
+
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th,td { text-align:left; padding:5px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--dim); font-weight:600; font-size:11px; text-transform:uppercase; }
+  td { font-family:var(--mono); }
+  .scroll { max-height:300px; overflow-y:auto; }
+  select { background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+           border-radius:6px; padding:5px 8px; font-size:12px; }
+  .muted { color:var(--dim); font-size:12px; }
+
+  /* --- config editor: a highlighted <pre> sitting exactly under a
+         transparent <textarea>, so the caret and selection stay native --- */
+  .editwrap { position:relative; height:56vh; min-height:280px; background:#0e0f15; }
+  .editwrap pre, .editwrap textarea {
+    margin:0; padding:10px 12px; border:0; position:absolute; inset:0;
+    font-family:var(--mono); font-size:12.5px; line-height:1.55;
+    white-space:pre; overflow:auto; tab-size:4;
+  }
+  .editwrap pre { pointer-events:none; color:var(--fg); }
+  .editwrap textarea { background:transparent; color:transparent; caret-color:var(--accent);
+                       resize:none; outline:none; }
+  .editwrap textarea::selection { background:rgba(200,164,92,.30); }
+  .tok-comment { color:#6b7080; font-style:italic; }
+  .tok-section { color:#7fb3ff; font-weight:600; }
+  .tok-key     { color:var(--accent); }
+  .tok-str     { color:#8fd18f; }
+  .tok-num     { color:#d98f6a; }
+  .tok-bool    { color:#c98fd9; }
+  .editbar { display:flex; align-items:center; gap:8px; padding:9px 10px;
+             border-top:1px solid var(--line); background:var(--panel2); flex-wrap:wrap; }
+  .editbar .path { font-family:var(--mono); font-size:11px; color:var(--dim);
+                   flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .findbox { background:#0e0f15; color:var(--fg); border:1px solid var(--line);
+             border-radius:6px; padding:5px 9px; font-family:var(--mono);
+             font-size:12px; width:180px; }
+  .findbox:focus { outline:none; border-color:var(--accent); }
+  .findbox.nomatch { border-color:var(--bad); }
+  .editbar button#findPrev, .editbar button#findNext {
+    padding:4px 10px; font-size:15px; line-height:1; }
+  .findcount { font-family:var(--mono); font-size:11px; color:var(--dim);
+               min-width:64px; }
+  /* The current hit, drawn in the highlight layer rather than as a native
+     textarea selection, so finding never has to take focus from the box. */
+  mark.find-hit { background:var(--accent); color:#1a1408; border-radius:2px;
+                  box-shadow:0 0 0 1px var(--accent); }
+  .dirty { color:var(--warn); font-size:12px; }
+  .saved { color:var(--ok); font-size:12px; }
+  .failed { color:var(--bad); font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <img class="logo" id="logo" alt="" hidden>
+  <h1 id="brandTitle" hidden></h1>
+  <span class="realm" id="realm"></span>
+  <span class="pop" id="pop" hidden></span>
+  <span class="spacer"></span>
+  <button class="primary" id="startAll">Start all</button>
+  <button class="danger" id="stopAll">Stop all</button>
+</header>
+
+<main>
+  <div>
+    <div class="card" style="margin-bottom:12px">
+      <h2>Servers</h2>
+      <div id="servers"></div>
+    </div>
+    <div class="card">
+      <h2>Database</h2>
+      <div class="body" style="padding-bottom:6px">
+        <select id="filter"></select>
+        <button id="refreshDb" style="padding:5px 10px">Refresh</button>
+      </div>
+      <div class="scroll"><div id="dbout" class="body muted">—</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="tabs">
+      <span class="tabgroup" id="tabs"></span>
+      <span class="tabsep" id="tabsep"></span>
+      <span class="tabgroup" id="cfgTabs"></span>
+    </div>
+
+    <div id="consoleView">
+      <pre id="console">connecting…</pre>
+      <div class="cmdbar">
+        <input id="cmd" placeholder="↑/↓ for history — sent to the world console" autocomplete="off">
+        <button id="send">Send</button>
+      </div>
+    </div>
+
+    <div id="editorView" hidden>
+      <div class="editwrap">
+        <pre id="hl"></pre>
+        <textarea id="editor" spellcheck="false" autocomplete="off"></textarea>
+      </div>
+      <div class="editbar">
+        <input id="find" class="findbox" placeholder="find…" autocomplete="off">
+        <button id="findGo" title="Search (Enter)">Find</button>
+        <button id="findPrev" title="Previous match (Shift+Enter)">&lsaquo;</button>
+        <button id="findNext" title="Next match (Enter)">&rsaquo;</button>
+        <span class="findcount" id="findCount"></span>
+        <span class="path" id="cfgPath">—</span>
+        <span id="cfgState"></span>
+        <button id="cfgReload">Reload</button>
+        <button class="primary" id="cfgSave" disabled>Save</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+let current = null, es = null, servers = [], history = [], hpos = -1;
+let logMax = 5000, branded = false, timers = false;
+
+const esc = s => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+function addLine(text) {
+  const box = $('#console');
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+  const cls = text.startsWith('> ') ? 'cmd'
+            : text.startsWith('***') ? 'sys'
+            : /error|failed|fatal/i.test(text) ? 'err' : '';
+  box.insertAdjacentHTML('beforeend',
+    cls ? `<span class="${cls}">${esc(text)}</span>\n` : esc(text) + '\n');
+  while (box.childNodes.length > logMax) box.removeChild(box.firstChild);
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+/* Both tab groups live on one card, so exactly one tab is active across
+   both and the view below switches to match. */
+function showView(which) {
+  $('#consoleView').hidden = which !== 'console';
+  $('#editorView').hidden  = which !== 'editor';
+}
+
+function clearActive() {
+  document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
+}
+
+async function selectServer(name) {
+  // Leaving the editor with unsaved work should ask, same as switching configs.
+  if (cfgName && !$('#editorView').hidden && $('#editor').value !== cfgClean &&
+      !confirm('Discard unsaved changes?')) return;
+  current = name;
+  clearActive();
+  document.querySelectorAll('#tabs button').forEach(b =>
+    b.classList.toggle('active', b.dataset.name === name));
+  showView('console');
+  if (es) es.close();
+  const box = $('#console');
+  box.textContent = '';
+  const r = await fetch(`/api/history?server=${encodeURIComponent(name)}`).then(r => r.json());
+  (r.lines || []).forEach(addLine);
+  es = new EventSource(`/api/stream?server=${encodeURIComponent(name)}`);
+  let opened = false;
+  es.onmessage = e => addLine(JSON.parse(e.data).line);
+  es.onopen = () => {
+    // EventSource reconnects by itself after a panel restart, but the buffer
+    // it reconnects to has moved on. Re-pull history so the view isn't stale.
+    if (opened) reloadHistory(name);
+    opened = true;
+  };
+  es.onerror = () => addLine('*** console disconnected — reconnecting… ***');
+}
+
+async function reloadHistory(name) {
+  if (name !== current) return;
+  const r = await fetch(`/api/history?server=${encodeURIComponent(name)}`).then(r => r.json());
+  $('#console').textContent = '';
+  (r.lines || []).forEach(addLine);
+  addLine('*** console reconnected ***');
+}
+
+/* Everything visual that differs between installs arrives as data, so this
+   file is identical for every core. Called once, on the first poll. */
+function applyBranding(b) {
+  if (!b || branded) return;
+  branded = true;
+  document.title = b.title || 'wowadmin';
+  if (b.logo) { const l = $('#logo'); l.src = b.logo; l.alt = b.logo_alt || ''; l.hidden = false; }
+  else { $('#brandTitle').textContent = b.title || 'wowadmin'; $('#brandTitle').hidden = false; }
+  const root = document.documentElement.style;
+  if (b.logo_height) root.setProperty('--logo-height', `${parseInt(b.logo_height, 10)}px`);
+  if (b.banner) {
+    root.setProperty('--banner-img', `url("${b.banner}")`);
+    root.setProperty('--banner-pos', b.banner_position || 'center 38%');
+    root.setProperty('--banner-opacity', String(b.banner_opacity ?? 0.30));
+  }
+  // Only the documented token names are honoured, so a typo in the TOML cannot
+  // inject an arbitrary property into the page.
+  const tokens = ['bg','panel','panel2','line','fg','dim','accent','ok','warn','bad'];
+  for (const [k, v] of Object.entries(b.theme || {}))
+    if (tokens.includes(k) && /^[-#\w(),.%\s]+$/.test(v)) root.setProperty(`--${k}`, v);
+  if (b.favicon) $('#favicon').href = b.favicon;
+  if (b.apple_icon) $('#appleIcon').href = b.apple_icon;
+  if (b.console_hint) $('#cmd').placeholder = b.console_hint;
+}
+
+/* Why a server's controls are greyed out, in the one place it can be said. */
+function badge(s) {
+  if (s.managed === false)
+    return ' <span class="badge" title="Declared with manage = false: this panel watches it but never starts or stops it">monitored</span>';
+  if (s.adopted)
+    return ' <span class="badge" title="Started outside the panel: it can be stopped, but has no console here">external</span>';
+  return '';
+}
+
+function renderServers() {
+  $('#servers').innerHTML = servers.map(s => `
+    <div class="srv">
+      <span class="dot ${s.state}"></span>
+      <span class="meta">
+        <div class="nm">${esc(s.display)}${badge(s)}</div>
+        <div class="sub">${s.running ? `pid ${s.pid} · ${fmt(s.uptime)}` : s.state}</div>
+      </span>
+      <button data-act="${s.running ? 'stop' : 'start'}" data-name="${s.name}" ${s.managed === false ? 'disabled' : ''}>
+        ${s.running ? 'Stop' : 'Start'}</button>
+      <button data-act="restart" data-name="${s.name}" ${s.running && s.managed !== false ? '' : 'disabled'}>↻</button>
+    </div>`).join('');
+}
+
+const fmt = s => s >= 3600 ? `${Math.floor(s/3600)}h ${Math.floor(s%3600/60)}m`
+               : s >= 60 ? `${Math.floor(s/60)}m ${s%60}s` : `${s}s`;
+
+async function poll() {
+  try {
+    const st = await fetch('/api/state').then(r => r.json());
+    servers = st.servers;
+    renderServers();
+    applyBranding(st.branding);
+    if (st.log_max_lines) logMax = st.log_max_lines;
+    // Built server-side from whichever realm keys are set, so a core with no
+    // separate auth port shows one port rather than the word "undefined".
+    $('#realm').textContent = st.realm_summary || '';
+    const pop = $('#pop');
+    if (st.population?.value !== undefined) {
+      pop.textContent = `${st.population.label || 'Online'}: ${st.population.value}`;
+      pop.hidden = false;
+    } else pop.hidden = true;
+    startTimers(st);
+    if (!$('#tabs').children.length) {
+      $('#tabs').innerHTML = servers.map(s =>
+        `<button data-name="${s.name}">${esc(s.display)}</button>`).join('');
+      $('#tabs').onclick = e => {
+        const b = e.target.closest('button');
+        if (b?.dataset.name) selectServer(b.dataset.name);
+      };
+      selectServer(servers.find(s => s.console)?.name || servers[0].name);
+    }
+    if (!$('#filter').children.length && st.filters?.length) {
+      $('#filter').innerHTML = st.filters.map(f =>
+        `<option${f === st.default_filter ? ' selected' : ''}>${esc(f)}</option>`).join('');
+      if (st.default_filter) $('#filter').value = st.default_filter;
+      loadDb();
+    }
+  } catch { /* panel restarting */ }
+}
+
+async function post(url, body) {
+  return fetch(url, {method:'POST', headers:{'Content-Type':'application/json'},
+                     body: JSON.stringify(body || {})}).then(r => r.json());
+}
+
+$('#servers').onclick = async e => {
+  const b = e.target.closest('button'); if (!b) return;
+  b.disabled = true;
+  await post(`/api/${b.dataset.act}`, {server: b.dataset.name});
+  poll();
+};
+$('#startAll').onclick = () => post('/api/start-all').then(poll);
+$('#stopAll').onclick  = () => { if (confirm('Stop all servers?')) post('/api/stop-all').then(poll); };
+
+async function send() {
+  const i = $('#cmd'), v = i.value.trim();
+  if (!v) return;
+  history.push(v); hpos = history.length; i.value = '';
+  const r = await post('/api/command', {command: v});
+  if (r.error || r.ok === false) addLine(`*** ${r.error || r.message} ***`);
+}
+$('#send').onclick = send;
+$('#cmd').onkeydown = e => {
+  if (e.key === 'Enter') send();
+  else if (e.key === 'ArrowUp' && hpos > 0) $('#cmd').value = history[--hpos] || '';
+  else if (e.key === 'ArrowDown') $('#cmd').value = ++hpos >= history.length ? (hpos = history.length, '') : history[hpos];
+};
+
+async function loadDb() {
+  const f = $('#filter').value;
+  const out = $('#dbout');
+  out.className = 'body muted'; out.textContent = 'loading…';
+  const r = await fetch(`/api/db?filter=${encodeURIComponent(f)}`).then(r => r.json());
+  // MySQL stopped is a normal state, not a fault: show nothing at all rather
+  // than a driver error the user can do nothing useful with.
+  if (r.offline) { out.textContent = ''; return; }
+  if (r.error) { out.textContent = r.error; return; }
+  if (!r.rows?.length) { out.textContent = 'no rows'; return; }
+  out.className = '';
+  out.innerHTML = `<table><thead><tr>${r.columns.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+    <tbody>${r.rows.map(row => `<tr>${row.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+}
+$('#refreshDb').onclick = loadDb;
+$('#filter').onchange = loadDb;
+
+/* ---------------- config editor ---------------- */
+let cfgName = null, cfgMtime = null, cfgClean = '';
+
+/* Line-oriented highlighter for the INI-style .conf files and TOML.
+   Deliberately small: these formats are line-based, so a per-line pass is
+   both accurate enough and impossible to get catastrophically wrong. */
+function highlight(text) {
+  return text.split('\n').map(line => {
+    if (/^\s*[#;]/.test(line)) return `<span class="tok-comment">${esc(line)}</span>`;
+    if (/^\s*\[.*\]\s*$/.test(line)) return `<span class="tok-section">${esc(line)}</span>`;
+    const m = line.match(/^(\s*)([^=]+?)(\s*=\s*)([\s\S]*)$/);
+    if (!m) return esc(line);
+    const [, lead, key, eq, rawVal] = m;
+    // split a trailing comment off the value so it colours separately
+    const c = rawVal.match(/^(.*?)(\s+[#;].*)$/);
+    const val = c ? c[1] : rawVal, tail = c ? c[2] : '';
+    let v = esc(val);
+    if (/^".*"$|^'.*'$|^'''/.test(val.trim())) v = `<span class="tok-str">${v}</span>`;
+    else if (/^-?\d+(\.\d+)?$/.test(val.trim())) v = `<span class="tok-num">${v}</span>`;
+    else if (/^(true|false)$/i.test(val.trim())) v = `<span class="tok-bool">${v}</span>`;
+    return esc(lead) + `<span class="tok-key">${esc(key)}</span>` + esc(eq) + v +
+           (tail ? `<span class="tok-comment">${esc(tail)}</span>` : '');
+  }).join('\n');
+}
+
+function paint() {
+  const ta = $('#editor');
+  let text = ta.value;
+  // Mark the current hit with control characters before highlighting: they
+  // survive HTML-escaping untouched, so they can be swapped for <mark> after.
+  if (matchIdx >= 0 && matches.length && lastTerm) {
+    const s = matches[matchIdx], e = s + lastTerm.length;
+    text = text.slice(0, s) + ' ' + text.slice(s, e) + '' + text.slice(e);
+  }
+  const html = highlight(text)
+    .split(' ').join('<mark class="find-hit">')
+    .split('').join('</mark>');
+  $('#hl').innerHTML = html + '\n';
+  $('#hl').scrollTop = ta.scrollTop;
+  $('#hl').scrollLeft = ta.scrollLeft;
+  const dirty = ta.value !== cfgClean;
+  $('#cfgSave').disabled = !dirty || !cfgName;
+  $('#cfgState').className = dirty ? 'dirty' : '';
+  $('#cfgState').textContent = dirty ? 'unsaved changes' : '';
+}
+
+async function loadConfig(name) {
+  if (cfgName && $('#editor').value !== cfgClean &&
+      !confirm('Discard unsaved changes?')) return;
+  cfgName = name;
+  clearActive();
+  document.querySelectorAll('#cfgTabs button').forEach(b =>
+    b.classList.toggle('active', b.dataset.cfg === name));
+  showView('editor');
+  const r = await fetch(`/api/config?name=${encodeURIComponent(name)}`).then(r => r.json());
+  if (r.error) {
+    $('#cfgPath').textContent = r.error;
+    $('#cfgState').className = 'failed'; $('#cfgState').textContent = 'load failed';
+    return;
+  }
+  cfgMtime = r.mtime; cfgClean = r.content;
+  $('#editor').value = r.content;
+  $('#cfgPath').textContent = `${r.path}  ·  ${r.bytes} bytes`;
+  $('#cfgState').textContent = '';
+  // offsets belong to the old file
+  matches = []; matchIdx = -1; lastTerm = '';
+  $('#findCount').textContent = ''; $('#find').classList.remove('nomatch');
+  paint();
+}
+
+async function saveConfig() {
+  if (!cfgName) return;
+  const body = {name: cfgName, content: $('#editor').value, mtime: cfgMtime};
+  const r = await post('/api/config-save', body);
+  const st = $('#cfgState');
+  if (r.error) { st.className = 'failed'; st.textContent = r.error; return; }
+  cfgMtime = r.mtime; cfgClean = body.content;
+  st.className = 'saved'; st.textContent = 'saved — restart the server to apply';
+  paint();
+  setTimeout(() => { if (st.textContent.startsWith('saved')) st.textContent = ''; }, 6000);
+}
+
+$('#editor').addEventListener('input', () => {
+  // Editing shifts every offset after the caret, so the recorded hits — and
+  // the mark drawn from them — are no longer trustworthy.
+  if (matches.length || matchIdx >= 0) {
+    matches = []; matchIdx = -1;
+    if (lastTerm) $('#findCount').textContent = 'edited — search again';
+  }
+  paint();
+});
+$('#editor').addEventListener('scroll', () => {
+  $('#hl').scrollTop = $('#editor').scrollTop;
+  $('#hl').scrollLeft = $('#editor').scrollLeft;
+});
+$('#editor').addEventListener('keydown', e => {
+  if (e.key === 'Tab') {                       // keep Tab in the editor
+    e.preventDefault();
+    const ta = e.target, s = ta.selectionStart;
+    ta.value = ta.value.slice(0, s) + '    ' + ta.value.slice(ta.selectionEnd);
+    ta.selectionStart = ta.selectionEnd = s + 4;
+    paint();
+  } else if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault(); saveConfig();
+  } else if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+    e.preventDefault(); $('#find').select();      // Ctrl+F goes to our find box
+  }
+});
+/* ---- find in file: case-insensitive, wraps around ---- */
+let matches = [], matchIdx = -1, lastTerm = '';
+
+function computeMatches(term) {
+  matches = [];
+  if (!term) return;
+  const hay = $('#editor').value.toLowerCase(), needle = term.toLowerCase();
+  let i = hay.indexOf(needle);
+  while (i !== -1) { matches.push(i); i = hay.indexOf(needle, i + 1); }
+}
+
+function showMatch(n) {
+  const ta = $('#editor');
+  if (!matches.length) {
+    $('#findCount').textContent = lastTerm ? '0/0' : '';
+    $('#find').classList.toggle('nomatch', !!lastTerm);
+    matchIdx = -1;
+    paint();
+    return;
+  }
+  $('#find').classList.remove('nomatch');
+  matchIdx = (n + matches.length) % matches.length;      // wrap both ways
+  const start = matches[matchIdx];
+  // Deliberately no ta.focus() and no setSelectionRange here: stealing focus
+  // mid-search put keystrokes into the file. The hit is drawn in the overlay
+  // instead, so it stays visible while the caret stays in the find box.
+  const line = ta.value.slice(0, start).split('\n').length - 1;
+  const lh = parseFloat(getComputedStyle(ta).lineHeight) || 19;
+  ta.scrollTop = Math.max(0, line * lh - ta.clientHeight / 2);
+  $('#hl').scrollTop = ta.scrollTop;
+  $('#findCount').textContent = `${matchIdx + 1}/${matches.length}`;
+  paint();
+}
+
+function runFind(step) {
+  const term = $('#find').value;
+  if (term !== lastTerm) { lastTerm = term; computeMatches(term); matchIdx = -1; }
+  if (!term) { $('#findCount').textContent = ''; $('#find').classList.remove('nomatch');
+               paint(); return; }
+  showMatch(matchIdx + step);
+}
+
+/* Typing only updates the match count — it never jumps or moves focus.
+   Searching is explicit: the Find button, Enter, or the ‹ › steppers. */
+$('#find').addEventListener('input', () => {
+  lastTerm = $('#find').value;
+  computeMatches(lastTerm);
+  matchIdx = -1;
+  $('#findCount').textContent = lastTerm ? `${matches.length} found` : '';
+  $('#find').classList.toggle('nomatch', !!lastTerm && !matches.length);
+  paint();
+});
+$('#findGo').onclick = () => runFind(1);
+$('#find').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); runFind(e.shiftKey ? -1 : 1); }
+  else if (e.key === 'Escape') { $('#find').value = ''; lastTerm = ''; matches = [];
+                                 $('#findCount').textContent = '';
+                                 $('#find').classList.remove('nomatch'); $('#editor').focus(); }
+});
+$('#findNext').onclick = () => runFind(1);
+$('#findPrev').onclick = () => runFind(-1);
+
+$('#cfgSave').onclick = saveConfig;
+$('#cfgReload').onclick = () => cfgName && (cfgClean = $('#editor').value, loadConfig(cfgName));
+window.addEventListener('beforeunload', e => {
+  if (cfgName && $('#editor').value !== cfgClean) { e.preventDefault(); e.returnValue = ''; }
+});
+
+(async function initConfigs() {
+  const r = await fetch('/api/configs').then(r => r.json());
+  if (!r.enabled || !r.files?.length) {
+    $('#cfgTabs').remove(); $('#tabsep').remove(); $('#editorView').remove();
+    return;
+  }
+  $('#cfgTabs').innerHTML = r.files.map(f =>
+    `<button class="cfg" data-cfg="${esc(f)}">${esc(f)}</button>`).join('');
+  $('#cfgTabs').onclick = e => {
+    const b = e.target.closest('button');
+    if (b?.dataset.cfg) loadConfig(b.dataset.cfg);
+  };
+  // Consoles are the landing view; configs load on demand.
+})();
+
+/* Poll rates come from the config, so they are set up after the first
+   successful response rather than guessed at load time. */
+function startTimers(st) {
+  if (timers) return;
+  timers = true;
+  setInterval(poll, Math.max(0.5, st.poll_interval || 3) * 1000);
+  setInterval(() => { if ($('#filter').value) loadDb(); },
+              Math.max(1, st.db_interval || 15) * 1000);
+}
+
+/* Keep retrying the first poll: until it lands there are no timers, and a
+   panel that is still starting up must not leave the page dead forever. */
+(async function boot() {
+  await poll();
+  if (!timers) setTimeout(boot, 2000);
+})();
+</script>
+</body>
+</html>

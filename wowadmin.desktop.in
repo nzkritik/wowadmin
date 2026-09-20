@@ -1,0 +1,31 @@
+# Desktop entry template. Replace @INSTALL@ with the directory holding run.sh
+# and @CONFIG@ with your wowadmin.toml, then copy to
+# ~/.local/share/applications/ and run `update-desktop-database ~/.local/share/applications`.
+#
+#   sed -e "s|@INSTALL@|$PWD|g" -e "s|@CONFIG@|$PWD/wowadmin.toml|g" \
+#       wowadmin.desktop.in > ~/.local/share/applications/wowadmin.desktop
+#
+# For a second realm, change Name, the --config path and [app].port, and save
+# it under a different filename.
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=wowadmin
+GenericName=Server Control Panel
+Comment=Start, monitor and control a local World of Warcraft emulator realm
+Icon=@INSTALL@/static/img/icon.svg
+Exec=@INSTALL@/run.sh --config @CONFIG@
+Path=@INSTALL@
+Terminal=false
+StartupNotify=true
+Categories=System;Monitor;
+Keywords=wow;mangos;cmangos;azerothcore;trinitycore;worldserver;realm;manager;
+Actions=Config;NoBrowser;
+
+[Desktop Action Config]
+Name=Edit the config
+Exec=xdg-open @CONFIG@
+
+[Desktop Action NoBrowser]
+Name=Start the panel without opening a browser
+Exec=@INSTALL@/run.sh --config @CONFIG@ --no-browser

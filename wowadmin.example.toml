@@ -1,0 +1,227 @@
+# wowadmin — example configuration.
+#
+# Copy this file, edit the [vars] block at the top, and you are most of the way
+# there. Ready-made starting points for specific cores live in examples/.
+#
+# Where wowadmin looks for its config, in order:
+#   1. --config /path/to/wowadmin.toml
+#   2. $WOWADMIN_CONFIG
+#   3. ./wowadmin.toml            (current directory)
+#   4. <install dir>/wowadmin.toml
+#   5. ~/.config/wowadmin/wowadmin.toml
+#
+# One checkout can drive several realms: give each its own TOML and its own
+# [app].port, and start one panel per realm with --config.
+#
+# Paths accept ~ and $ENVIRONMENT_VARIABLES. A bare command name (e.g.
+# "mysqld") is looked up on PATH. Restart the panel after editing this file —
+# nothing here is re-read while it runs.
+
+
+# --- variables --------------------------------------------------------------
+# Every ${name} below is replaced from this table (and then from the
+# environment). This is the only block most people need to change. It applies
+# to paths, arguments, SQL and branding alike.
+#
+# Two are always defined and can be overridden here:
+#   ${config_dir}  the directory this file lives in
+#   ${home}        your home directory
+
+[vars]
+root        = "/srv/wow/myrealm"   # the server install: bin/, etc/, data/
+bot_pattern = "RNDBOT%"           # how bot accounts are named, if you run any
+
+
+[app]
+bind          = "127.0.0.1"   # loopback only; this panel has NO authentication
+port          = 8090
+log_max_lines = 5000          # per console, in the browser too; older lines go
+poll_interval = 3.0           # seconds between server-status refreshes
+shutdown_delay   = 30         # seconds of warning given to players
+shutdown_timeout = 300        # then how long the world may take to save and exit
+autostart     = false         # start the servers when the panel opens
+
+# Browser to open the panel in: a command on PATH or an absolute path, with
+# arguments allowed (e.g. "chromium --app="). Blank or not found means the
+# system default. Pass --no-browser to skip opening one at all.
+browser       = ""
+
+# Binding anywhere but loopback is refused unless you set this, because anyone
+# who reaches the panel can edit server configs and type into the world
+# console. Prefer an SSH tunnel:  ssh -N -L 8090:127.0.0.1:8090 user@host
+# allow_remote_without_auth = false
+
+
+# --- branding ---------------------------------------------------------------
+# All optional. Image paths may be absolute, or relative to this file, and are
+# served by name — the browser never sees a filesystem path. No artwork ships
+# with wowadmin: point these at your own files.
+
+[branding]
+title      = "My Realm — Server Control"   # browser tab; falls back to realm.name
+# logo            = "theme/logo.png"       # shown in the header; omit for a text title
+# logo_alt        = "My Realm"
+# logo_height     = 46                     # pixels
+# banner          = "theme/banner.jpg"     # sits behind the header, darkened
+# banner_opacity  = 0.30                   # raise for dark art, lower for bright
+# banner_position = "center 38%"           # any CSS background-position
+# favicon         = "theme/icon-64.png"
+# apple_icon      = "theme/icon-180.png"
+
+# Hint text in the console command box — use your core's own status command.
+console_hint = "server info    (↑/↓ for history — sent to the world console)"
+
+# Accent and status colours. Any CSS colour; unset keys keep the default dark
+# theme. Handy for telling two realms apart at a glance.
+[branding.theme]
+accent = "#c8a45c"    # highlights, buttons, the caret in the config editor
+# bg     = "#12131a"
+# panel  = "#1a1c26"
+# panel2 = "#21242f"
+# line   = "#2c3040"
+# fg     = "#e6e8f0"
+# dim    = "#8b90a4"
+# ok     = "#5dbb63"
+# warn   = "#d9a441"
+# bad    = "#d2565b"
+
+
+# --- realm ------------------------------------------------------------------
+# Shown in the header. Set `summary` to control the line exactly, or leave it
+# out and whichever keys below are present are joined with " · ".
+
+[realm]
+name         = "My Realm"
+id           = 1
+realm_port   = 3724              # the port your client's realmlist points at
+world_port   = 8085
+server_build = "3.3.5a build 12340"
+# summary    = "My Realm · WotLK · 3.3.5a"
+
+
+# --- database ---------------------------------------------------------------
+# The roster table and the header's online count. Queries are yours: whatever
+# your core's schema looks like, write SQL that fits it. wowadmin never invents
+# table names.
+
+[database]
+enabled = true
+client  = "${root}/mysql/bin/mysql"   # or "mysql" / "mariadb" from PATH
+
+# Credentials, two styles. Either a defaults file (preferred: keep it 0600 and
+# the password never appears here) …
+defaults_file = "${root}/wowadmin-client.cnf"
+# … or explicit connection settings. A password set here is passed to the
+# client through MYSQL_PWD, never on the command line, but it does sit in this
+# file in plain text.
+# host     = "127.0.0.1"
+# port     = 3306
+# socket   = "/run/mysqld/mysqld.sock"   # used instead of host/port when set
+# user     = "wow"
+# password = "$WOWADMIN_DB_PASSWORD"     # an env var keeps it out of this file
+# database = "characters"                # default schema for unqualified names
+
+# Which port means "the database is up". Defaults to the ready_port of the
+# server named here, so the probe survives renaming that section.
+server   = "mysql"
+interval = 15.0                    # seconds between roster refreshes
+
+# One number for the header badge. Omit to hide it.
+count_query = "SELECT COUNT(*) AS Online FROM characters.characters WHERE online = 1"
+
+# One dropdown entry per key, in this order. Add your own and it appears with
+# no code change. These are TOML literal strings (''') so quotes inside need no
+# escaping. The example SQL below is AzerothCore's schema — adjust for yours.
+[database.filters]
+"Online Players" = '''
+SELECT c.name AS Name, a.username AS Account, c.level AS Lvl,
+       c.race AS Race, c.class AS Class, c.zone AS Zone
+  FROM acore_characters.characters c
+  JOIN acore_auth.account a ON a.id = c.account
+ WHERE c.online = 1 AND a.username NOT LIKE '${bot_pattern}'
+ ORDER BY c.level DESC LIMIT 200'''
+
+"Online Bots" = '''
+SELECT c.name AS Name, a.username AS Account, c.level AS Lvl,
+       c.race AS Race, c.class AS Class, c.zone AS Zone
+  FROM acore_characters.characters c
+  JOIN acore_auth.account a ON a.id = c.account
+ WHERE c.online = 1 AND a.username LIKE '${bot_pattern}'
+ ORDER BY c.level DESC LIMIT 200'''
+
+"All Online" = '''
+SELECT c.name AS Name, c.level AS Lvl, c.race AS Race, c.class AS Class,
+       c.zone AS Zone
+  FROM acore_characters.characters c
+ WHERE c.online = 1 ORDER BY c.level DESC LIMIT 200'''
+
+"Accounts" = '''
+SELECT a.id AS Id, a.username AS Account, a.expansion AS Exp,
+       COALESCE(aa.gmlevel, 0) AS GM, a.last_login AS LastLogin
+  FROM acore_auth.account a
+  LEFT JOIN acore_auth.account_access aa ON aa.id = a.id
+ WHERE a.username NOT LIKE '${bot_pattern}' ORDER BY a.id LIMIT 200'''
+
+
+# --- managed processes ------------------------------------------------------
+# Started in the order they appear here, and stopped in reverse. Each gets its
+# own console tab. Any section can be turned off with enabled = false.
+#
+# Readiness, so "starting" becomes "running" at the right moment:
+#   ready_port     — the port it listens on once it is up (cheap and reliable)
+#   ready_pattern  — a regex to wait for in its own output
+#   ready_timeout  — seconds before giving up waiting (it keeps running)
+#
+# Stopping, in order of preference:
+#   console = true      — the graceful path: stop_console_command is typed in
+#   stop_command        — an external command (e.g. mysqladmin shutdown)
+#   neither             — SIGTERM, then SIGKILL after shutdown_timeout
+
+[servers.mysql]
+display_name  = "MySQL"
+executable    = "${root}/mysql/bin/mysqld"
+args          = ["--defaults-file=${root}/my.cnf"]
+working_dir   = "${root}"
+enabled       = true
+# mysqld logs to its own error file, not stdout, so readiness is a port probe.
+ready_port    = 3306
+ready_timeout = 120.0
+stop_command  = ["${root}/mysql/bin/mysqladmin",
+                 "--defaults-file=${root}/my.cnf", "-u", "root", "shutdown"]
+
+[servers.auth]
+display_name  = "Auth Server"
+executable    = "${root}/bin/authserver"
+args          = []
+working_dir   = "${root}/bin"
+enabled       = true
+ready_port    = 3724
+ready_timeout = 60.0
+# env = { MALLOC_ARENA_MAX = "2" }        # extra environment for this process
+
+[servers.world]
+display_name  = "World Server"
+executable    = "${root}/bin/worldserver"
+args          = []
+working_dir   = "${root}/bin"
+enabled       = true
+console       = true               # accepts commands on stdin
+ready_pattern = "World Initialized"
+ready_timeout = 900.0              # a first run may migrate the DB and spawn bots
+# {delay} is [app].shutdown_delay. Change only if your core words it differently.
+stop_console_command = "server shutdown {delay}"
+
+
+# --- config editor ----------------------------------------------------------
+# Only the files listed here can be read or written. Paths never come from the
+# browser: it sends a name, the server resolves it from this table. Each save
+# is checked against the file's mtime, backed up, then written atomically.
+
+[configs]
+enabled = true
+backup  = true          # write <file>.bak-<timestamp> before saving
+
+[configs.files]
+"worldserver.conf" = "${root}/etc/worldserver.conf"
+"authserver.conf"  = "${root}/etc/authserver.conf"
+"wowadmin.toml"    = "${config_dir}/wowadmin.toml"
