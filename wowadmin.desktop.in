@@ -13,6 +13,8 @@ Version=1.0
 Name=wowadmin
 GenericName=Server Control Panel
 Comment=Start, monitor and control a local World of Warcraft emulator realm
+# The panel supervises the servers without owning them: closing it leaves
+# them running, and reopening it picks their consoles back up.
 Icon=@INSTALL@/static/img/icon.svg
 Exec=@INSTALL@/run.sh --config @CONFIG@
 Path=@INSTALL@

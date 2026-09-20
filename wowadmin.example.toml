@@ -41,6 +41,12 @@ shutdown_delay   = 30         # seconds of warning given to players
 shutdown_timeout = 300        # then how long the world may take to save and exit
 autostart     = false         # start the servers when the panel opens
 
+# Where each server's console log and stdin FIFO live. The default is
+# $XDG_STATE_HOME/wowadmin/<name of this config file>, which keeps two realms
+# apart automatically. A log is replaced at each start unless that server sets
+# log_append = true.
+# log_dir     = "~/.local/state/wowadmin/myrealm"
+
 # Browser to open the panel in: a command on PATH or an absolute path, with
 # arguments allowed (e.g. "chromium --app="). Blank or not found means the
 # system default. Pass --no-browser to skip opening one at all.
@@ -180,7 +186,9 @@ SELECT a.id AS Id, a.username AS Account, a.expansion AS Exp,
 # Point `executable` at the process that actually runs, never at a wrapper
 # script that launches it in the background. The panel identifies a running
 # server by its executable, so a wrapper can be started but never adopted or
-# stopped — it looks stopped while your database is still up.
+# stopped — it looks stopped while your database is still up. If you must use
+# a wrapper, add match_executable = "…/the/real/binary" so it can still be
+# recognised.
 [servers.mysql]
 display_name  = "MySQL"
 executable    = "${root}/mysql/bin/mysqld"

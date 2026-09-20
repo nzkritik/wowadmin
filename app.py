@@ -9,9 +9,10 @@ Stdlib only. Console output is a one-way stream, so it goes to the browser over
 Server-Sent Events rather than WebSockets; commands and control are ordinary
 POSTs. That keeps the whole thing dependency-free.
 
-The world server is started with a real stdin pipe, so commands go straight to
-its console prompt — no FIFO, and no risk of the console seeing EOF and
-shutting the server down.
+A managed server writes to its own log file, which the panel tails, and takes
+console input through a FIFO the panel opens read-write. Neither stream is a
+pipe this process owns, so closing the panel leaves the servers running — and
+a later panel can pick up their consoles again.
 """
 
 from __future__ import annotations
@@ -142,6 +143,22 @@ APP = CFG.get("app", {})
 MAX_LINES = int(APP.get("log_max_lines", 5000))
 
 
+def state_dir() -> Path:
+    """Where per-server log files and console FIFOs live.
+
+    Default is $XDG_STATE_HOME/wowadmin/<config name>, so two realms driven
+    from one checkout never share a log file or a console pipe.
+    """
+    raw = APP.get("log_dir")
+    if raw:
+        return Path(os.path.expanduser(os.path.expandvars(raw)))
+    base = os.environ.get("XDG_STATE_HOME") or "~/.local/state"
+    return Path(base).expanduser() / "wowadmin" / CONFIG_PATH.stem
+
+
+STATE_DIR = state_dir()
+
+
 def port_open(port: int, host: str = "127.0.0.1") -> bool:
     with socket.socket() as s:
         s.settimeout(0.4)
@@ -162,7 +179,19 @@ class Managed:
         self.managed = bool(spec.get("manage", True))
         self.retries = 0
         self.retry_pending = False
+        # Output goes to a file the panel tails, and console input arrives
+        # through a FIFO. Neither is a pipe this process owns, so closing the
+        # panel cannot take the server down with it.
+        self.log_path = Path(spec.get("log_file") or (STATE_DIR / f"{name}.log"))
+        self.fifo_path = STATE_DIR / f"{name}.stdin"
+        self.generation = 0          # retires the tail thread of an old run
+        self.fifo_fd: int | None = None
         self.exe = resolve_exe(spec.get("executable", ""))
+        # What to look for when identifying a running copy of this server.
+        # Defaults to the executable, but a launcher that execs something else
+        # (a wrapper script, a shell that backgrounds the real binary) needs to
+        # name the process that actually runs.
+        self.match_exe = resolve_exe(spec.get("match_executable", "")) or self.exe
         self.cwd = (os.path.expanduser(spec.get("working_dir", ""))
                     or os.path.dirname(self.exe))
         self.proc: subprocess.Popen | None = None
@@ -216,36 +245,43 @@ class Managed:
     def _scan_external(self) -> int | None:
         """Find a live process running our executable that we didn't spawn.
 
-        Two realms of the same core on one box run the same binary, so the
-        executable alone is not identity: the candidate must also sit in our
-        working directory (or, failing that, own our readiness port). Without
-        that check each panel happily adopts the other realm's world server
-        and offers to stop it.
+        Identity is not the executable alone: two realms of the same core run
+        the same binary, and each panel would happily adopt the other's world
+        server. So candidates are preferred by working directory — but a match
+        is still accepted when it is the only one on the machine, because
+        plenty of servers chdir after starting (mariadbd moves to its data
+        directory). Several candidates and no directory match is genuinely
+        ambiguous, and nothing is adopted.
         """
         if psutil is None:
             return None
-        exe = os.path.realpath(self.exe)
+        exe = os.path.realpath(self.match_exe)
         if not exe:
             return None
         want_cwd = os.path.realpath(self.cwd) if self.cwd else ""
-        loose: int | None = None
-        for p in psutil.process_iter(["pid", "exe", "name"]):
+        candidates: list[int] = []
+        for p in psutil.process_iter(["pid", "exe", "name", "cmdline"]):
             try:
                 pexe = p.info.get("exe")
-                if not pexe or os.path.realpath(pexe) != exe:
+                hit = bool(pexe) and os.path.realpath(pexe) == exe
+                if not hit:
+                    # A script's exe is its interpreter, so also accept the
+                    # path appearing among the arguments.
+                    args = p.info.get("cmdline") or []
+                    hit = any(os.path.realpath(a) == exe
+                              for a in args[1:] if a.startswith("/"))
+                if not hit:
                     continue
-                if not want_cwd:
-                    return p.info["pid"]
-                try:
-                    if os.path.realpath(p.cwd()) == want_cwd:
-                        return p.info["pid"]
-                except (psutil.AccessDenied, OSError):
-                    # cwd unreadable (different user, or a kernel thread):
-                    # remember it, but keep looking for a confident match.
-                    loose = loose or p.info["pid"]
+                candidates.append(p.info["pid"])
+                if want_cwd:
+                    try:
+                        if os.path.realpath(p.cwd()) == want_cwd:
+                            return p.info["pid"]
+                    except (psutil.AccessDenied, OSError):
+                        pass            # unreadable cwd: fall through
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
-        return loose
+        return candidates[0] if len(candidates) == 1 else None
 
     def refresh(self) -> None:
         """Reconcile state with reality before reporting it."""
@@ -258,38 +294,95 @@ class Managed:
             self.adopted_pid = None
         found = self._scan_external()
         if found:
+            newly = self.adopted_pid != found
             self.adopted_pid = found
             if self.state in ("stopped", "starting"):
                 self.state = "running"
+            # Its log file is still being written, so the console works even
+            # though this panel never owned the process.
+            if newly and self.log_path.is_file():
+                self.generation += 1
+                threading.Thread(target=self._tail,
+                                 args=(self.generation, False),
+                                 daemon=True).start()
         elif self.state not in ("starting", "stopping"):
             self.state = "stopped"
 
     def is_running(self) -> bool:
         return self.owns_process() or self.adopted_pid is not None
 
-    def _pump(self) -> None:
-        assert self.proc and self.proc.stdout
-        for raw in self.proc.stdout:
-            self.emit(raw)
-        code = self.proc.wait()
-        self.emit(f"*** {self.display} exited (code {code}) ***")
-        was_starting = self.state == "starting"
-        self.state = "stopped"
-        self.started_at = None
+    def _tail(self, generation: int, from_start: bool) -> None:
+        """Follow this server's log file into the console ring buffer.
 
+        Reading a file rather than a pipe is the whole point: the server's
+        stdout belongs to the file, not to this process, so the panel can come
+        and go — or crash — without the server ever seeing a broken pipe.
+        """
+        deadline = time.time() + 10
+        while not self.log_path.exists() and time.time() < deadline:
+            time.sleep(0.1)
+        try:
+            fh = open(self.log_path, "r", errors="replace")
+        except OSError as exc:
+            self.emit(f"*** cannot read {self.log_path}: {exc} ***")
+            return
+        with fh:
+            if not from_start:
+                # Adopting a server already running: show the recent tail, not
+                # a whole session's backlog.
+                fh.seek(0, os.SEEK_END)
+                fh.seek(max(0, fh.tell() - 64_000))
+                fh.readline()                       # discard a partial line
+            pending = ""
+            while self.generation == generation:
+                chunk = fh.readline()
+                if chunk:
+                    pending += chunk
+                    if pending.endswith("\n"):
+                        self.emit(pending)
+                        pending = ""
+                    continue
+                # Caught up. If the process is gone and nothing more arrives,
+                # flush whatever partial line is left and stop.
+                if not self.is_running():
+                    time.sleep(0.3)
+                    if not fh.readline() and self.generation == generation:
+                        if pending:
+                            self.emit(pending)
+                        return
+                    fh.seek(fh.tell())
+                time.sleep(0.2)
+
+    def _reap(self) -> None:
+        assert self.proc
+        code = self.proc.wait()
+
+        # Decide and record what happens next BEFORE pausing for the tail.
+        # Anything watching this server — start_all, above all — reads state
+        # and retry_pending continuously, and a gap in which a server that is
+        # about to be retried reads as plainly dead makes the start chain give
+        # up on it.
+        was_starting = self.state == "starting"
         # A server that dies before it is ready usually lost a race with its
         # database. Retry, but only during startup and only if asked: a crash
         # after a good start is news, not something to paper over, and a
         # deliberate stop must stay stopped.
         delay = float(self.spec.get("retry_delay", 0) or 0)
         limit = int(self.spec.get("max_retries", 0) or 0)
-        if code != 0 and was_starting and delay > 0 and self.retries < limit:
+        retrying = (code != 0 and was_starting and delay > 0
+                    and self.retries < limit)
+        if retrying:
             self.retries += 1
             self.retry_pending = True
-            # Still "starting", not "stopped": the panel is mid-attempt, and
-            # start_all must keep waiting rather than move on to the next
-            # server while this one's database connection is still missing.
-            self.state = "starting"
+            self.state = "starting"          # still mid-attempt, not stopped
+        else:
+            self.state = "stopped"
+            self.started_at = None
+
+        # Now let the tail catch the server's last words before the notice.
+        time.sleep(0.5)
+        self.emit(f"*** {self.display} exited (code {code}) ***")
+        if retrying:
             self.emit(f"*** retrying in {delay:g}s "
                       f"({self.retries}/{limit}) ***")
             threading.Timer(delay, self._retry_start).start()
@@ -318,17 +411,27 @@ class Managed:
         cwd = self.cwd or os.path.dirname(exe)
         env = os.environ.copy()
         env.update({k: str(v) for k, v in self.spec.get("env", {}).items()})
+
+        try:
+            log_fd, stdin_fd = self._open_streams()
+        except OSError as exc:
+            self.state = "stopped"
+            self.retry_pending = False
+            self.last_error = str(exc)
+            self.emit(f"*** cannot prepare {self.log_path}: {exc} ***")
+            return False, str(exc)
+
+        self.generation += 1
+        generation = self.generation
         self.emit(f"*** starting {self.display} ***")
         try:
             self.proc = subprocess.Popen(
                 [exe, *self.spec.get("args", [])],
                 cwd=cwd,
                 env=env,
-                stdin=subprocess.PIPE if self.wants_console else subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
+                stdin=stdin_fd,
+                stdout=log_fd,
                 stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
                 start_new_session=True,
             )
         except OSError as exc:
@@ -337,11 +440,38 @@ class Managed:
             self.last_error = str(exc)
             self.emit(f"*** failed to start: {exc} ***")
             return False, str(exc)
+        finally:
+            # The child holds its own copies. This process keeps neither, so
+            # nothing it does later can disturb the server's streams.
+            os.close(log_fd)
+            if stdin_fd != subprocess.DEVNULL:
+                os.close(stdin_fd)
 
         self.started_at = time.time()
-        threading.Thread(target=self._pump, daemon=True).start()
+        threading.Thread(target=self._tail, args=(generation, True), daemon=True).start()
+        threading.Thread(target=self._reap, daemon=True).start()
         threading.Thread(target=self._await_ready, daemon=True).start()
         return True, "starting"
+
+    def _open_streams(self) -> tuple[int, int]:
+        """A fresh log file, and a console FIFO for servers that take input."""
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        mode = os.O_WRONLY | os.O_CREAT
+        mode |= os.O_APPEND if self.spec.get("log_append", False) else os.O_TRUNC
+        log_fd = os.open(self.log_path, mode, 0o644)
+
+        if not self.wants_console:
+            return log_fd, subprocess.DEVNULL
+
+        self.fifo_path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.fifo_path.is_fifo():
+            self.fifo_path.unlink(missing_ok=True)
+            os.mkfifo(self.fifo_path, 0o600)
+        # O_RDWR is the point: the descriptor the child inherits is itself a
+        # writer, so the FIFO never reaches end-of-file. A world server whose
+        # console sees EOF shuts itself down, and that is exactly what would
+        # happen every time this panel closed.
+        return log_fd, os.open(self.fifo_path, os.O_RDWR)
 
     def _await_ready(self) -> None:
         """Flip to 'running' once the readiness signal appears."""
@@ -367,21 +497,38 @@ class Managed:
             self.emit(f"*** {self.display} ready ***")
 
     def send(self, text: str) -> tuple[bool, str]:
+        """Write one command into the server's console FIFO.
+
+        Because the FIFO outlives any one panel process, this also works for a
+        server started by an earlier panel from the same config — the case
+        that used to be answerable only with "restart it here".
+        """
         if not self.wants_console:
             return False, "this process has no console"
-        if self.adopted_pid is not None and not self.owns_process():
-            return False, ("this server was started outside the panel — "
-                           "restart it here to use the console")
-        if not self.owns_process() or not self.proc or not self.proc.stdin:
+        self.refresh()
+        if not self.is_running():
             return False, "not running"
+        if not self.fifo_path.is_fifo():
+            return False, ("no console pipe for this server — it was started "
+                           "outside the panel, so start it here to get one")
         # Echo before writing: the server can answer faster than this thread
         # gets to run again, and a reply printed above its own command makes
         # the transcript lie about the order.
         self.emit(f"> {text}")
         try:
-            self.proc.stdin.write(text.rstrip("\n") + "\n")
-            self.proc.stdin.flush()
-        except (BrokenPipeError, OSError) as exc:
+            if self.fifo_fd is None:
+                # O_NONBLOCK turns "nobody is reading this" into an immediate
+                # ENXIO rather than a hang.
+                self.fifo_fd = os.open(self.fifo_path,
+                                       os.O_WRONLY | os.O_NONBLOCK)
+            os.write(self.fifo_fd, (text.rstrip("\n") + "\n").encode())
+        except OSError as exc:
+            if self.fifo_fd is not None:
+                try:
+                    os.close(self.fifo_fd)
+                except OSError:
+                    pass
+                self.fifo_fd = None
             return False, str(exc)
         return True, "sent"
 
@@ -423,8 +570,9 @@ class Managed:
                   f"{' (started outside the panel)' if adopted else ''} ***")
         timeout = float(APP.get("shutdown_timeout", 300))
 
-        # Preferred: the server's own graceful path.
-        if self.wants_console and not adopted:
+        # Preferred: the server's own graceful path. Thanks to the FIFO this
+        # is available even for a server an earlier panel started.
+        if self.wants_console and self.fifo_path.is_fifo():
             template = self.spec.get("stop_console_command",
                                      "server shutdown {delay}")
             delay = int(APP.get("shutdown_delay", 1))
@@ -496,6 +644,7 @@ class Managed:
             "pid": pid,
             "uptime": uptime,
             "console": self.wants_console,
+            "console_ready": self.wants_console and self.fifo_path.is_fifo(),
             "managed": self.managed,
             "error": self.last_error,
         }
@@ -532,6 +681,8 @@ def start_all() -> None:
         # user is already looking.
         srv.refresh()
         if not srv.is_running():
+            # Let the exit notice land first, so the console reads in order.
+            time.sleep(0.7)
             srv.emit(f"*** {srv.display} did not come up — "
                      f"not starting the rest ***")
             for later in ORDER[ORDER.index(name) + 1:]:
@@ -1019,6 +1170,14 @@ def preflight() -> list[str]:
             warn.append(f"{srv.name}: no executable configured")
         elif not os.path.isfile(srv.exe):
             warn.append(f"{srv.name}: executable not found: {srv.exe}")
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        probe = STATE_DIR / ".writable"
+        probe.touch()
+        probe.unlink()
+    except OSError as exc:
+        warn.append(f"log directory is not writable ({STATE_DIR}): {exc} — "
+                    f"consoles will be empty. Set [app].log_dir.")
     if DB.get("enabled") and not os.path.isfile(DB_CLIENT):
         warn.append(f"database client not found: {DB_CLIENT or '(unset)'}")
     if DB.get("enabled") and DB.get("password") and not DB.get("defaults_file"):

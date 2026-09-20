@@ -31,9 +31,11 @@ untested starting points and are clearly labelled as such.
   the rest are not started and every console says why.
 - **Readiness that means something.** A server is "running" when its port
   opens or its own log says it is ready — not after a guessed delay.
-- **A console per server**, streamed live, with command history. Commands go
-  to the world server's real stdin, so there is no FIFO and no risk of the
-  console seeing EOF and shutting the server down.
+- **A console per server**, streamed live, with command history.
+- **Servers outlive the panel.** Each one writes to its own log file, which
+  the panel tails, and takes console input through a FIFO. Neither stream
+  belongs to the panel process, so closing it — or killing it, or a crash —
+  leaves your realm running, and the next panel picks the consoles back up.
 - **Graceful shutdown first**: the world server is asked to shut down through
   its own console, then SIGTERM, then SIGKILL, with your timeout between.
 - **Retries during startup** for the server that always loses the race with
@@ -42,8 +44,10 @@ untested starting points and are clearly labelled as such.
   dropdown; the header shows a live count.
 - **A config editor** for the files you list, with syntax highlighting,
   find, an "edited elsewhere" guard, a timestamped backup and an atomic write.
-- **Adoption** of servers you started yourself in a terminal: they show up,
-  with uptime, and can be stopped (optional, needs `psutil`).
+- **Adoption** of servers the panel did not start — from an earlier panel, or
+  from your own terminal. They show up with their uptime, their console still
+  streams, and they can be shut down through it rather than by signal
+  (optional, needs `psutil`).
 - **Your branding**: title, logo, header banner, favicon and the whole colour
   palette, so two realms never get mistaken for each other.
 
@@ -86,6 +90,7 @@ $EDITOR wowadmin.toml
 
 The panel opens itself in your browser at `http://127.0.0.1:8090`. Closing it
 leaves the game servers running — it supervises them, it does not own them.
+Open it again later and it finds them where it left them.
 
 `./run.sh --no-browser` skips opening a tab. `./run.sh --print-config` shows
 the config with every variable resolved, which is the fastest way to find a
@@ -161,6 +166,8 @@ stop bottom to top.
 | Key | Meaning |
 |---|---|
 | `executable` | Path, or a bare command looked up on `PATH` |
+| `match_executable` | The real binary, when `executable` is a wrapper script |
+| `log_file`, `log_append` | Where its output goes; appended rather than replaced |
 | `args`, `working_dir`, `env` | How to launch it |
 | `enabled` | `false` leaves it out of the panel entirely |
 | `manage` | `false` = watch only; never start or stop it |
@@ -190,6 +197,18 @@ server install and never enters this repository.
 **No artwork ships with wowadmin, and you should not commit any into a fork.**
 WoW logos, splash art and UI textures are Blizzard's. Use them locally all you
 like; do not redistribute them.
+
+### Logs and consoles
+
+Each managed server's output goes to `$XDG_STATE_HOME/wowadmin/<config name>/`
+(usually `~/.local/state/wowadmin/…`) as `<server>.log`, alongside a
+`<server>.stdin` FIFO for the ones that take console input. That directory is
+per config file, so two realms never share either. Override it with
+`[app].log_dir`, or a single server's with `log_file`.
+
+A log is replaced at each start. Set `log_append = true` on a server to keep
+the history instead — nothing rotates it for you. These are the panel's view
+of the console, not a substitute for the logs your core writes itself.
 
 ### More than one realm
 
