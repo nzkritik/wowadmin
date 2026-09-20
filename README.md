@@ -36,6 +36,8 @@ untested starting points and are clearly labelled as such.
   the panel tails, and takes console input through a FIFO. Neither stream
   belongs to the panel process, so closing it — or killing it, or a crash —
   leaves your realm running, and the next panel picks the consoles back up.
+  (On Windows this holds for servers without a console; see
+  [Windows](#windows).)
 - **Graceful shutdown first**: the world server is asked to shut down through
   its own console, then SIGTERM, then SIGKILL, with your timeout between.
 - **Retries during startup** for the server that always loses the race with
@@ -62,7 +64,7 @@ untested starting points and are clearly labelled as such.
 
 ## Requirements
 
-- Linux (or anything with POSIX process groups and signals)
+- Linux, or Windows with the caveats in [Windows](#windows)
 - Python **3.11+** — nothing else. The panel is stdlib-only.
 - Optionally `psutil`, and only for one feature: detecting servers that were
   started outside the panel. Without it, those show as stopped. Install it
@@ -85,7 +87,7 @@ cp examples/cmangos-classic.toml wowadmin.toml
 # section you must change.
 $EDITOR wowadmin.toml
 
-./run.sh
+./run.sh          # run.bat on Windows
 ```
 
 The panel opens itself in your browser at `http://127.0.0.1:8090`. Closing it
@@ -95,6 +97,47 @@ Open it again later and it finds them where it left them.
 `./run.sh --no-browser` skips opening a tab. `./run.sh --print-config` shows
 the config with every variable resolved, which is the fastest way to find a
 path typo.
+
+### Windows
+
+Most WoW emulator repacks are Windows-native, so `run.bat` is there and the
+panel works — but two POSIX facilities have no equivalent, and the difference
+is worth knowing before you rely on it.
+
+**Verified on Linux only.** The Windows paths are written and their branches
+are exercised, but I have no Windows machine to run a realm on. Reports
+welcome; treat it as untested.
+
+**A console server stops with the panel.** On Linux each server's console
+input is a FIFO the panel opens read-write, so the input never reaches
+end-of-file and the realm outlives the panel. Windows pipes reach EOF as soon
+as the last writing handle closes, and the panel holds that handle, so a
+server with `console = true` gets an ordinary pipe: close the panel and its
+console ends, which most cores treat as "shut down". Servers *without* a
+console — your database, your auth server — are unaffected and keep running.
+The panel says this at startup rather than leaving you to find out.
+
+For the same reason, a console server the panel did not start cannot be sent
+commands on Windows; it still shows up, with its uptime, and can be stopped.
+
+**Give every non-console server a `stop_command`.** Windows has no SIGTERM: a
+signal is `TerminateProcess`, which is a kill, not a request. The console path
+(`stop_console_command`) is graceful and works. For anything else — a database,
+above all — set `stop_command` to its own shutdown tool, e.g.
+
+```toml
+stop_command = ['C:/wow/mysql/bin/mysqladmin.exe', '--defaults-file=C:/wow/my.cnf', '-u', 'root', 'shutdown']
+```
+
+**Write paths with forward slashes**, or TOML will read your backslashes as
+escapes: `"C:\wow\bin"` is an invalid escape sequence and the config will not
+load. `"C:/wow/bin"` works everywhere, and a TOML *literal* string in single
+quotes — `'C:\wow\bin'` — takes backslashes as written. Remember the `.exe`
+on every `executable`.
+
+Logs and console pipes go to `%LOCALAPPDATA%\wowadmin\<config name>\`.
+
+`psutil` is optional here too, and installs with `py -m pip install psutil`.
 
 ### A desktop launcher
 
@@ -290,7 +333,7 @@ the panel and `psutil` is not installed. That is the one feature that needs it.
 
 ## Developing
 
-`python3 tests/smoke.py` starts a panel against a stand-in server in a
+`python3 tests/smoke.py` (or `py -3 tests\smoke.py`) starts a panel against a stand-in server in a
 temporary directory and exercises every endpoint — start, readiness, console,
 config editor, graceful stop — once with bots configured and once without. It
 needs no realm and no database. Run it before sending a change; a panel that

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Launch the wowadmin control panel.
+# Launch the wowadmin control panel. (Windows: use run.bat.)
 #
 # The panel opens itself in the browser named by [app].browser in the config,
 # falling back to the system default. Pass --no-browser to skip that, or

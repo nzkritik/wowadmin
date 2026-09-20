@@ -16,6 +16,12 @@
 # Paths accept ~ and $ENVIRONMENT_VARIABLES. A bare command name (e.g.
 # "mysqld") is looked up on PATH. Restart the panel after editing this file —
 # nothing here is re-read while it runs.
+#
+# On Windows, write paths with forward slashes ("C:/wow/bin") or in TOML
+# literal strings ('C:\wow\bin'): in an ordinary double-quoted string a
+# backslash starts an escape sequence and the file will not parse. Executables
+# need their .exe, and every non-console server wants a stop_command, because
+# Windows has no graceful signal. See "Windows" in README.md.
 
 
 # --- variables --------------------------------------------------------------

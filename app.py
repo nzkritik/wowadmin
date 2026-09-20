@@ -30,9 +30,16 @@ import subprocess
 import sys
 import threading
 import time
-import tomllib
 import webbrowser
 from collections import deque
+
+try:
+    import tomllib
+except ModuleNotFoundError:                           # pragma: no cover
+    # tomllib arrived in 3.11, and the bare ImportError names only the module.
+    raise SystemExit(
+        f"wowadmin needs Python 3.11 or newer; this is "
+        f"{sys.version_info.major}.{sys.version_info.minor}.")
 
 try:
     import psutil
@@ -46,6 +53,22 @@ BASE = Path(__file__).resolve().parent
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 LOOPBACK = {"127.0.0.1", "::1", "localhost", "127.0.1.1"}
+WINDOWS = os.name == "nt"
+
+# Keeping a spawned server out of the panel's own process group means Ctrl-C
+# in the terminal that started the panel does not also interrupt the realm.
+if WINDOWS:
+    SPAWN_KWARGS = {"creationflags": (subprocess.CREATE_NEW_PROCESS_GROUP
+                                      | subprocess.CREATE_NO_WINDOW)}
+else:
+    SPAWN_KWARGS = {"start_new_session": True}
+
+
+def is_executable(path: str) -> bool:
+    """Windows has no execute bit; being a file is as much as can be asked."""
+    if not os.path.isfile(path):
+        return False
+    return True if WINDOWS else os.access(path, os.X_OK)
 
 
 # --- configuration ---------------------------------------------------------
@@ -153,13 +176,17 @@ MAX_LINES = int(APP.get("log_max_lines", 5000))
 def state_dir() -> Path:
     """Where per-server log files and console FIFOs live.
 
-    Default is $XDG_STATE_HOME/wowadmin/<config name>, so two realms driven
-    from one checkout never share a log file or a console pipe.
+    Default is $XDG_STATE_HOME/wowadmin/<config name> (%LOCALAPPDATA% on
+    Windows), so two realms driven from one checkout never share a log file
+    or a console pipe.
     """
     raw = APP.get("log_dir")
     if raw:
         return Path(os.path.expanduser(os.path.expandvars(raw)))
-    base = os.environ.get("XDG_STATE_HOME") or "~/.local/state"
+    if WINDOWS:
+        base = os.environ.get("LOCALAPPDATA") or "~/AppData/Local"
+    else:
+        base = os.environ.get("XDG_STATE_HOME") or "~/.local/state"
     return Path(base).expanduser() / "wowadmin" / CONFIG_PATH.stem
 
 
@@ -408,7 +435,7 @@ class Managed:
         exe = self.exe
         if not exe:
             return False, f"no executable configured for {self.name}"
-        if not os.path.isfile(exe) or not os.access(exe, os.X_OK):
+        if not is_executable(exe):
             self.retry_pending = False
             return False, f"not executable: {exe}"
 
@@ -439,7 +466,7 @@ class Managed:
                 stdin=stdin_fd,
                 stdout=log_fd,
                 stderr=subprocess.STDOUT,
-                start_new_session=True,
+                **SPAWN_KWARGS,
             )
         except OSError as exc:
             self.state = "stopped"
@@ -451,7 +478,9 @@ class Managed:
             # The child holds its own copies. This process keeps neither, so
             # nothing it does later can disturb the server's streams.
             os.close(log_fd)
-            if stdin_fd != subprocess.DEVNULL:
+            # Only a real descriptor is ours to close: DEVNULL and PIPE are
+            # negative sentinels subprocess interprets, not file descriptors.
+            if isinstance(stdin_fd, int) and stdin_fd >= 0:
                 os.close(stdin_fd)
 
         self.started_at = time.time()
@@ -461,14 +490,28 @@ class Managed:
         return True, "starting"
 
     def _open_streams(self) -> tuple[int, int]:
-        """A fresh log file, and a console FIFO for servers that take input."""
+        """A fresh log file, and console input for servers that take it.
+
+        Output is a file on both platforms, so no server's stdout is ever a
+        pipe this panel owns. Console *input* is where the two diverge — see
+        has_fifo().
+        """
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         mode = os.O_WRONLY | os.O_CREAT
         mode |= os.O_APPEND if self.spec.get("log_append", False) else os.O_TRUNC
+        mode |= getattr(os, "O_BINARY", 0)   # Windows defaults to text mode
         log_fd = os.open(self.log_path, mode, 0o644)
 
         if not self.wants_console:
             return log_fd, subprocess.DEVNULL
+
+        if WINDOWS:
+            # No FIFO, and no equivalent of the trick below: a Windows pipe
+            # reaches EOF as soon as the last writing handle closes, and the
+            # panel holds that handle. So console servers keep an ordinary
+            # pipe, and the panel closing ends their console — which most
+            # cores treat as "shut down". Non-console servers are unaffected.
+            return log_fd, subprocess.PIPE
 
         self.fifo_path.parent.mkdir(parents=True, exist_ok=True)
         if not self.fifo_path.is_fifo():
@@ -479,6 +522,22 @@ class Managed:
         # console sees EOF shuts itself down, and that is exactly what would
         # happen every time this panel closed.
         return log_fd, os.open(self.fifo_path, os.O_RDWR)
+
+    def has_fifo(self) -> bool:
+        """Whether this server has a console pipe outliving the panel."""
+        return not WINDOWS and self.fifo_path.is_fifo()
+
+    def can_send(self) -> bool:
+        """Whether a console command can reach this server right now.
+
+        On POSIX the FIFO is enough, so even a server an earlier panel started
+        can be driven. On Windows only a pipe this panel itself holds will do.
+        """
+        if not self.wants_console:
+            return False
+        if WINDOWS:
+            return bool(self.owns_process() and self.proc and self.proc.stdin)
+        return self.has_fifo()
 
     def _await_ready(self) -> None:
         """Flip to 'running' once the readiness signal appears."""
@@ -515,21 +574,27 @@ class Managed:
         self.refresh()
         if not self.is_running():
             return False, "not running"
-        if not self.fifo_path.is_fifo():
+        if not self.can_send():
             return False, ("no console pipe for this server — it was started "
                            "outside the panel, so start it here to get one")
         # Echo before writing: the server can answer faster than this thread
         # gets to run again, and a reply printed above its own command makes
         # the transcript lie about the order.
         self.emit(f"> {text}")
+        line = text.rstrip("\n") + "\n"
         try:
-            if self.fifo_fd is None:
-                # O_NONBLOCK turns "nobody is reading this" into an immediate
-                # ENXIO rather than a hang.
-                self.fifo_fd = os.open(self.fifo_path,
-                                       os.O_WRONLY | os.O_NONBLOCK)
-            os.write(self.fifo_fd, (text.rstrip("\n") + "\n").encode())
-        except OSError as exc:
+            if WINDOWS:
+                assert self.proc and self.proc.stdin
+                self.proc.stdin.write(line.encode())
+                self.proc.stdin.flush()
+            else:
+                if self.fifo_fd is None:
+                    # O_NONBLOCK turns "nobody is reading this" into an
+                    # immediate ENXIO rather than a hang.
+                    self.fifo_fd = os.open(self.fifo_path,
+                                           os.O_WRONLY | os.O_NONBLOCK)
+                os.write(self.fifo_fd, line.encode())
+        except (OSError, ValueError) as exc:
             if self.fifo_fd is not None:
                 try:
                     os.close(self.fifo_fd)
@@ -539,10 +604,31 @@ class Managed:
             return False, str(exc)
         return True, "sent"
 
-    def _signal(self, sig) -> None:
-        """Signal whichever process we have — ours or an adopted one."""
+    def _terminate(self, force: bool = False) -> None:
+        """End whichever process we have — ours or an adopted one.
+
+        On POSIX this is SIGTERM, which a core handles by saving and exiting,
+        then SIGKILL. Windows has no polite equivalent: both map to
+        TerminateProcess, so a Windows realm should be stopped through its
+        console, or through a stop_command, not through this.
+        """
+        if WINDOWS:
+            if self.owns_process() and self.proc:
+                (self.proc.kill if force else self.proc.terminate)()
+                return
+            if self.adopted_pid and psutil is not None:
+                try:
+                    proc = psutil.Process(self.adopted_pid)
+                    (proc.kill if force else proc.terminate)()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            return
+
+        sig = signal.SIGKILL if force else signal.SIGTERM
         if self.owns_process() and self.proc:
             try:
+                # The whole group, so a server that forked helpers takes them
+                # with it rather than leaving them behind.
                 os.killpg(os.getpgid(self.proc.pid), sig)
                 return
             except OSError:
@@ -579,7 +665,7 @@ class Managed:
 
         # Preferred: the server's own graceful path. Thanks to the FIFO this
         # is available even for a server an earlier panel started.
-        if self.wants_console and self.fifo_path.is_fifo():
+        if self.can_send():
             template = self.spec.get("stop_console_command",
                                      "server shutdown {delay}")
             delay = int(APP.get("shutdown_delay", 1))
@@ -587,8 +673,8 @@ class Managed:
                 self.send(template.format(delay=delay))
             except (KeyError, IndexError) as exc:
                 self.emit(f"*** stop_console_command is not a valid template "
-                          f"({exc}) — falling back to SIGTERM ***")
-                self._signal(signal.SIGTERM)
+                          f"({exc}) — terminating instead ***")
+                self._terminate()
         elif self.spec.get("stop_command"):
             try:
                 subprocess.run([resolve_exe(self.spec["stop_command"][0]),
@@ -597,9 +683,11 @@ class Managed:
             except Exception as exc:                      # noqa: BLE001
                 self.emit(f"*** stop command failed: {exc} ***")
         else:
-            # Emulator cores shut down cleanly on SIGTERM, which is the only
-            # graceful lever we have over an adopted process.
-            self._signal(signal.SIGTERM)
+            # On POSIX, emulator cores shut down cleanly on SIGTERM, the
+            # only graceful lever over a process we do not own. On Windows
+            # there is no such lever, which is why stop_command matters more
+            # there.
+            self._terminate()
 
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -611,7 +699,7 @@ class Managed:
         self.refresh()
         if self.is_running():
             self.emit("*** graceful stop timed out — terminating ***")
-            self._signal(signal.SIGTERM)
+            self._terminate()
             for _ in range(10):
                 time.sleep(0.5)
                 self.refresh()
@@ -620,7 +708,7 @@ class Managed:
         self.refresh()
         if self.is_running():
             self.emit("*** still alive — killing ***")
-            self._signal(signal.SIGKILL)
+            self._terminate(force=True)
             time.sleep(1)
             self.refresh()
 
@@ -651,7 +739,7 @@ class Managed:
             "pid": pid,
             "uptime": uptime,
             "console": self.wants_console,
-            "console_ready": self.wants_console and self.fifo_path.is_fifo(),
+            "console_ready": self.can_send(),
             "managed": self.managed,
             "error": self.last_error,
         }
@@ -1166,7 +1254,7 @@ def resolve_browser(spec: str) -> list[str] | None:
     exe = shutil.which(parts[0])
     if not exe:
         cand = os.path.expanduser(parts[0])
-        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+        if is_executable(cand):
             exe = cand
     if not exe:
         print(f"browser {parts[0]!r} not found — using system default")
@@ -1180,7 +1268,7 @@ def open_panel(url: str) -> None:
     if argv:
         try:
             subprocess.Popen([*argv, url], stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, start_new_session=True)
+                             stderr=subprocess.DEVNULL, **SPAWN_KWARGS)
             print(f"opened in {os.path.basename(argv[0])}")
             return
         except OSError as exc:
@@ -1195,7 +1283,7 @@ def open_panel(url: str) -> None:
         pass
     if shutil.which("xdg-open"):
         subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True)
+                         stderr=subprocess.DEVNULL, **SPAWN_KWARGS)
         print("opened via xdg-open")
     else:
         print(f"open {url} manually")
@@ -1307,6 +1395,10 @@ def main() -> int:
         print(f"managing: {', '.join(SERVERS[n].display for n in ORDER)}")
     for line in preflight():
         print(f"  ! {line}")
+    if WINDOWS and any(s.wants_console for s in SERVERS.values()):
+        print("  ! Windows: a console server's input is an ordinary pipe, so "
+              "closing this panel ends its console and most cores then shut "
+              "down. Stop the panel only when you mean to stop the realm.")
 
     if APP.get("autostart", False):
         threading.Thread(target=start_all, daemon=True).start()
