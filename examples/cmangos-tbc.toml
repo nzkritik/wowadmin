@@ -57,13 +57,13 @@ SELECT c.name AS Name, acc.username AS Account, c.level AS Lvl,
   JOIN tbcrealmd.account acc ON c.account = acc.id
  WHERE c.online = 1 AND acc.username NOT LIKE '${bot_pattern}'
  ORDER BY c.level DESC LIMIT 200'''
-"Online Bots" = '''
+"Online Bots" = { needs_bots = true, sql = '''
 SELECT c.name AS Name, acc.username AS Account, c.level AS Lvl,
        c.race AS Race, c.class AS Class, c.`zone` AS Zone
   FROM tbccharacters.characters c
   JOIN tbcrealmd.account acc ON c.account = acc.id
  WHERE c.online = 1 AND acc.username LIKE '${bot_pattern}'
- ORDER BY c.level DESC LIMIT 200'''
+ ORDER BY c.level DESC LIMIT 200''' }
 "All Online" = '''
 SELECT c.name AS Name, c.level AS Lvl, c.race AS Race, c.class AS Class,
        c.`zone` AS Zone

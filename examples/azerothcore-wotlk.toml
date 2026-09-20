@@ -57,13 +57,13 @@ SELECT c.name AS Name, a.username AS Account, c.level AS Lvl,
   JOIN acore_auth.account a ON a.id = c.account
  WHERE c.online = 1 AND a.username NOT LIKE '${bot_pattern}'
  ORDER BY c.level DESC LIMIT 200'''
-"Online Bots" = '''
+"Online Bots" = { needs_bots = true, sql = '''
 SELECT c.name AS Name, a.username AS Account, c.level AS Lvl,
        c.race AS Race, c.class AS Class, c.zone AS Zone
   FROM acore_characters.characters c
   JOIN acore_auth.account a ON a.id = c.account
  WHERE c.online = 1 AND a.username LIKE '${bot_pattern}'
- ORDER BY c.level DESC LIMIT 200'''
+ ORDER BY c.level DESC LIMIT 200''' }
 "All Online" = '''
 SELECT c.name AS Name, c.level AS Lvl, c.race AS Race, c.class AS Class, c.zone AS Zone
   FROM acore_characters.characters c

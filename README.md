@@ -136,6 +136,9 @@ its executable, so a wrapper can be started but never recognised or stopped.
 substituted into the queries, so the Players / Bots split works whatever your
 bots are called.
 
+If your core has no bots, leave `bot_pattern` unset and the bot-only views
+disappear by themselves — see [Realms without bots](#realms-without-bots).
+
 ## Configuration
 
 `wowadmin.example.toml` documents every key inline. The short version:
@@ -197,6 +200,29 @@ server install and never enters this repository.
 **No artwork ships with wowadmin, and you should not commit any into a fork.**
 WoW logos, splash art and UI textures are Blizzard's. Use them locally all you
 like; do not redistribute them.
+
+### Realms without bots
+
+Plenty of cores have no playerbots, and an "Online Bots" tab that is forever
+empty is just noise. So a filter can declare that it needs them:
+
+```toml
+[database.filters]
+"All Online"  = '''SELECT …'''
+"Online Bots" = { needs_bots = true, sql = '''SELECT …''' }
+```
+
+A filter written as plain SQL is always offered; one written as a table with
+`needs_bots = true` is hidden unless the realm has bots. Whether it does is
+taken from `[database].bots`, or inferred from whether `[vars].bot_pattern` is
+set — so on a realm that never mentions bots, the shipped profiles drop their
+bot tab with no editing at all.
+
+Only mark the views that are *about* bots. A filter that merely excludes them,
+like an account list, needs no marking: `${bot_pattern}` is always defined, and
+on a bot-free realm it is empty, so `NOT LIKE ''` excludes nothing and the
+filter goes on showing everybody. That is the distinction the marking exists
+to make, and it cannot be guessed from the SQL.
 
 ### Logs and consoles
 
@@ -261,6 +287,14 @@ schema. The exact client error is shown in the panel where the table would be.
 
 **A server shows "stopped" although it is running** — you started it outside
 the panel and `psutil` is not installed. That is the one feature that needs it.
+
+## Developing
+
+`python3 tests/smoke.py` starts a panel against a stand-in server in a
+temporary directory and exercises every endpoint — start, readiness, console,
+config editor, graceful stop — once with bots configured and once without. It
+needs no realm and no database. Run it before sending a change; a panel that
+prints its banner can still fail on the first request.
 
 ## Contributing
 

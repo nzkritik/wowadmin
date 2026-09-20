@@ -113,8 +113,15 @@ def load_config(path: Path) -> dict:
     # can say ${config_dir}/../bin and never mention an absolute path.
     vars.setdefault("config_dir", str(path.parent))
     vars.setdefault("home", str(Path.home()))
+    # Always defined, so SQL written to exclude bots stays valid on a realm
+    # that has none: "NOT LIKE \'\'" excludes nothing, which is exactly right,
+    # and "LIKE \'\'" matches nothing, which is also exactly right.
+    vars.setdefault("bot_pattern", "")
     expanded = {k: expand(v, vars) for k, v in cfg.items() if k != "vars"}
     expanded["vars"] = vars
+    # The raw text is kept because one question can only be asked of it: which
+    # queries refer to ${bot_pattern}. After expansion that is unknowable.
+    expanded["_raw"] = cfg
     return expanded
 
 
@@ -701,6 +708,45 @@ def stop_all() -> None:
 
 DB = CFG.get("database", {})
 DB_CLIENT = resolve_exe(DB.get("client", ""))
+RAW_DB = CFG.get("_raw", {}).get("database", {})
+
+
+def bots_enabled() -> bool:
+    """Whether this realm runs bots, and so whether bot-only views apply.
+
+    Explicit [database].bots wins. Otherwise it is inferred from the pattern:
+    a realm that never defined one has nothing to tell bots apart by.
+    """
+    if "bots" in DB:
+        return bool(DB["bots"])
+    return bool(str(CFG.get("vars", {}).get("bot_pattern", "")).strip())
+
+
+BOTS = bots_enabled()
+
+
+def filter_sql(value) -> str:
+    """A filter is either the SQL itself, or a table with sql = '…'."""
+    if isinstance(value, dict):
+        return str(value.get("sql", ""))
+    return str(value)
+
+
+def needs_bots(value) -> bool:
+    """Whether a filter is meaningless without bots.
+
+    Declared per filter rather than guessed from the SQL. Mentioning
+    ${bot_pattern} is not the test: an account list that merely excludes bots
+    still lists accounts perfectly well on a realm that has none.
+    """
+    return isinstance(value, dict) and bool(value.get("needs_bots", False))
+
+
+def visible_filters() -> dict[str, str]:
+    """The roster filters this realm should actually offer."""
+    return {name: filter_sql(value)
+            for name, value in DB.get("filters", {}).items()
+            if BOTS or not needs_bots(value)}
 
 
 def db_probe_port() -> int | None:
@@ -977,7 +1023,7 @@ class Handler(BaseHTTPRequestHandler):
                                        "application/octet-stream"))
 
         if path == "/api/state":
-            filters = list(DB.get("filters", {}))
+            filters = list(visible_filters())
             default = DB.get("default_filter", "")
             return self._json({
                 "servers": [SERVERS[n].status() for n in ORDER],
@@ -1004,7 +1050,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/db":
             if not DB.get("enabled", False):
                 return self._json({"error": "database panel disabled"}, 400)
-            filters = DB.get("filters", {})
+            filters = visible_filters()
             want = qs.get("filter", [DB.get("default_filter", "")])[0]
             if want not in filters:
                 return self._json({"error": f"unknown filter {want!r}"}, 400)
@@ -1180,6 +1226,32 @@ def preflight() -> list[str]:
                     f"consoles will be empty. Set [app].log_dir.")
     if DB.get("enabled") and not os.path.isfile(DB_CLIENT):
         warn.append(f"database client not found: {DB_CLIENT or '(unset)'}")
+    if DB.get("enabled") and DB.get("defaults_file"):
+        # The client's own message for this is "Fatal error in defaults
+        # handling. Program aborted", which says nothing about which file.
+        df = Path(os.path.expanduser(DB["defaults_file"]))
+        if not df.is_file():
+            warn.append(f"[database].defaults_file not found: {df}")
+        elif df.stat().st_mode & 0o077:
+            warn.append(f"{df} is readable by other users; chmod 600 it")
+    if DB.get("enabled"):
+        declared = DB.get("filters", {})
+        pattern = str(CFG.get("vars", {}).get("bot_pattern", ""))
+        bot_only = [n for n, v in declared.items() if needs_bots(v)]
+        if BOTS and bot_only and not pattern.strip():
+            # "LIKE ''" matches nothing and raises no error, so these would
+            # quietly come back empty for ever.
+            warn.append("bot filters are declared but [vars].bot_pattern is "
+                        "empty — they will silently match nothing. Set a "
+                        "pattern, or [database].bots = false to hide them.")
+        if not BOTS and bot_only:
+            warn.append(f"no bots configured — hiding: {', '.join(bot_only)}")
+        if declared and not visible_filters():
+            warn.append("every roster filter is declared needs_bots and no "
+                        "bots are configured — the roster will be empty.")
+        for name, value in declared.items():
+            if not filter_sql(value).strip():
+                warn.append(f"roster filter {name!r} has no sql")
     if DB.get("enabled") and DB.get("password") and not DB.get("defaults_file"):
         warn.append("[database].password sits in this config file; a "
                     "--defaults-file with 0600 permissions is safer")

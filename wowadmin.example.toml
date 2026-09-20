@@ -135,9 +135,22 @@ interval = 15.0                    # seconds between roster refreshes
 # One number for the header badge. Omit to hide it.
 count_query = "SELECT COUNT(*) AS Online FROM characters.characters WHERE online = 1"
 
+# Does this realm run bots? Unset means "whichever [vars].bot_pattern implies",
+# so a realm that never set a pattern gets the bot-free treatment for free.
+# Set it explicitly to override either way.
+# bots = true
+
 # One dropdown entry per key, in this order. Add your own and it appears with
 # no code change. These are TOML literal strings (''') so quotes inside need no
 # escaping. The example SQL below is AzerothCore's schema — adjust for yours.
+#
+# A filter is either the SQL on its own, or a table:
+#     "Name" = { needs_bots = true, sql = '''…''' }
+# needs_bots marks a view that means nothing without bots, and it is hidden on
+# a realm that has none. Mark only the genuinely bot-only views: a filter that
+# merely *excludes* bots needs no marking, because ${bot_pattern} is always
+# defined — empty on a bot-free realm, where "NOT LIKE ''" excludes nothing
+# and the filter goes on showing everybody, which is what you want.
 [database.filters]
 "Online Players" = '''
 SELECT c.name AS Name, a.username AS Account, c.level AS Lvl,
@@ -147,13 +160,13 @@ SELECT c.name AS Name, a.username AS Account, c.level AS Lvl,
  WHERE c.online = 1 AND a.username NOT LIKE '${bot_pattern}'
  ORDER BY c.level DESC LIMIT 200'''
 
-"Online Bots" = '''
+"Online Bots" = { needs_bots = true, sql = '''
 SELECT c.name AS Name, a.username AS Account, c.level AS Lvl,
        c.race AS Race, c.class AS Class, c.zone AS Zone
   FROM acore_characters.characters c
   JOIN acore_auth.account a ON a.id = c.account
  WHERE c.online = 1 AND a.username LIKE '${bot_pattern}'
- ORDER BY c.level DESC LIMIT 200'''
+ ORDER BY c.level DESC LIMIT 200''' }
 
 "All Online" = '''
 SELECT c.name AS Name, c.level AS Lvl, c.race AS Race, c.class AS Class,
