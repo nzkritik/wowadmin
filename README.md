@@ -52,6 +52,9 @@ untested starting points and are clearly labelled as such.
   (optional, needs `psutil`).
 - **Your branding**: title, logo, header banner, favicon and the whole colour
   palette, so two realms never get mistaken for each other.
+- **A terminal mode** for servers you reach over SSH: the same realm in a
+  tmux session, with a control window and a window per server. See
+  [Terminal mode](#terminal-mode-tmux-over-ssh).
 
 ## What it does not do
 
@@ -146,6 +149,68 @@ sed -e "s|@INSTALL@|$PWD|g" -e "s|@CONFIG@|$PWD/wowadmin.toml|g" \
     wowadmin.desktop.in > ~/.local/share/applications/wowadmin.desktop
 update-desktop-database ~/.local/share/applications
 ```
+
+## Terminal mode: tmux over SSH
+
+For a realm on a headless server you reach over SSH, `run-tmux.sh` runs the same
+realm, from the same config, in a **tmux session** instead of a web page:
+
+| Window | What it holds |
+| --- | --- |
+| `control` | A full-screen control panel: each server's state, PID, uptime, CPU and memory; the machine's CPU, load, RAM, swap and disk; players online |
+| one per server | The server itself (e.g. `mysql`, `realm`, `world`), running directly on the window's terminal. The world console is the real one: switch to the window and type |
+
+```bash
+sudo apt install tmux python3          # Debian 12: tmux 3.3, Python 3.11
+./run-tmux.sh --config ~/.config/wowadmin/myrealm.toml
+```
+
+That creates the session (`wowadmin-<config name>`) if it doesn't exist and
+attaches to it. **Detach with `Ctrl-b d`, or `q` in the control window, and the
+realm keeps running.** Log in again later and run the same command to get back
+to it.
+
+In the control window:
+
+| Key | Action |
+| --- | --- |
+| `up` / `down`, `1`-`9` | Select a server |
+| `Enter` | Open the selected server's window (back with `Ctrl-b w`, the window list) |
+| `s` / `x` / `r` | Start / stop / restart the selected server |
+| `S` / `X` / `R` | Start / stop / restart everything |
+| `q` | Detach |
+
+Stops and restarts ask for confirmation. A stop pressed during a long start
+cancels the start. The same rules as the web panel apply: servers start in
+config order, each waited for until its port opens or its ready line appears,
+with the configured retries, and stop in reverse. A world server is stopped
+through its own console (`stop_console_command`), then SIGTERM, then SIGKILL.
+
+Everything also works without attaching, for scripts and quick checks:
+
+```bash
+./run-tmux.sh -c myrealm.toml status
+./run-tmux.sh -c myrealm.toml start            # everything, in order
+./run-tmux.sh -c myrealm.toml restart world    # one server, by its [servers.NAME] key
+./run-tmux.sh -c myrealm.toml stop
+./run-tmux.sh -c myrealm.toml down             # stop everything and close the session
+```
+
+`./run-tmux.sh --start` creates the session and starts the realm in one go, as
+does `[app].autostart = true`.
+
+Each server's output is kept in its window's scrollback (`Ctrl-b [` to scroll)
+and copied to `tmux-<server>.log` in the panel's log directory.
+
+**Web panel or tmux, not both.** Each recognises servers it didn't start as
+"running outside" (by executable, and by arguments too when two servers share
+one) and won't start a second copy. It can still stop them, but only with
+SIGTERM, since their console belongs to the other front end.
+
+The optional `[tmux]` table in the config sets the session name, the
+scrollback length and the disk shown in the stats; see
+`wowadmin.example.toml`. Terminal mode is Linux only (it reads `/proc`) and
+needs tmux 3.0 or later.
 
 ## Adapting it to your core
 
@@ -338,6 +403,11 @@ temporary directory and exercises every endpoint — start, readiness, console,
 config editor, graceful stop — once with bots configured and once without. It
 needs no realm and no database. Run it before sending a change; a panel that
 prints its banner can still fail on the first request.
+
+`python3 tests/tmux_smoke.py` does the same for terminal mode, on a private
+tmux server that can't touch your own sessions: ordered start with retries,
+console and signal stops, servers running outside the session, and the
+control window's keys. It needs `tmux`.
 
 ## Contributing
 

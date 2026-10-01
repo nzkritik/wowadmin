@@ -248,6 +248,15 @@ stop_console_command = "server shutdown {delay}"
 # browser: it sends a name, the server resolves it from this table. Each save
 # is checked against the file's mtime, backed up, then written atomically.
 
+# --- terminal mode (run-tmux.sh) ---------------------------------------------
+# All optional. Used only by the tmux front end.
+
+[tmux]
+# session       = "wowadmin-myrealm"   # default: wowadmin-<name of this file>
+# history_limit = 50000                # scrollback lines per server window
+# disk          = "/srv/wow"           # disk shown in the stats; default: the
+#                                      # first server's working_dir
+
 [configs]
 enabled = true
 backup  = true          # write <file>.bak-<timestamp> before saving
