@@ -29,6 +29,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 import webbrowser
 from collections import deque
 
@@ -1272,8 +1273,20 @@ def main() -> int:
     try:
         httpd = ThreadingHTTPServer((host, port), Handler)
     except OSError as exc:
-        # Almost always another panel already on this port. Say which port and
-        # what to do, rather than printing a socket traceback.
+        # Almost always another panel already on this port. If it is one of
+        # ours, a desktop launch should land on it rather than fail with an
+        # error nobody sees (Terminal=false).
+        url = f"http://{host}:{port}"
+        try:
+            with urllib.request.urlopen(f"{url}/api/state", timeout=3) as resp:
+                ours = resp.status == 200 and isinstance(json.load(resp), dict)
+        except Exception:                                  # noqa: BLE001
+            ours = False
+        if ours:
+            print(f"wowadmin is already running on {url}")
+            if not OPTS.no_browser:
+                open_panel(url)
+            return 0
         print(f"cannot listen on {host}:{port}: {exc}\n"
               f"Another wowadmin (or something else) may already be there. "
               f"Change [app].port, or stop the other one.", file=sys.stderr)
